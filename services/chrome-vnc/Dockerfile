@@ -31,6 +31,7 @@ RUN git clone --depth 1 https://github.com/novnc/noVNC.git /opt/noVNC \
     && echo '<meta http-equiv=refresh content=0;url=/vnc.html>' > /opt/noVNC/index.html
 
 COPY services/chrome-vnc/entrypoint.sh /entrypoint.sh
+COPY services/chrome-vnc/cdp-proxy.py /opt/cdp-proxy.py
 RUN chmod +x /entrypoint.sh
 
 EXPOSE $CDP_PORT $VNC_PORT $NOVNC_PORT
