@@ -48,6 +48,7 @@ google-chrome-stable \
     --no-first-run \
     --password-store=basic \
     --remote-debugging-port="$CDP_PORT" \
+    --remote-debugging-address=0.0.0.0 \
     --user-data-dir="$CHROME_PROFILE_DIR" \
     --window-size=414,896 \
     https://x.com/login \
