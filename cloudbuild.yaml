@@ -1,0 +1,47 @@
+# Deployable-unit build for x-followers-sweep
+# On push to main → GKE via Cloud Deploy.
+#
+# One-time setup:
+#   gcloud deploy apply --file=clouddeploy.yaml --region=us-central1 --project=adlt-s26
+#   gcloud builds triggers create github \
+#     --name="x-followers-sweep-deploy" \
+#     --repo-owner="alexis-de-la-torre" \
+#     --repo-name="x-followers-sweep" \
+#     --branch-pattern="^main$" \
+#     --build-config="cloudbuild.yaml" \
+#     --region=us-central1 --project=adlt-s26 \
+#     --service-account="projects/adlt-s26/serviceAccounts/24315173277-compute@developer.gserviceaccount.com"
+steps:
+  # Build the sweeper-agent image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/sweeper-agent:$SHORT_SHA'
+      - '-f'
+      - 'services/sweeper-agent/Dockerfile'
+      - '.'
+    id: 'build-sweeper-agent'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/sweeper-agent:$SHORT_SHA'
+    id: 'push-sweeper-agent'
+
+  # Create release in Cloud Deploy
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'deploy'
+      - 'releases'
+      - 'create'
+      - 'xfs-$SHORT_SHA'
+      - '--delivery-pipeline=adlt-s26-x-followers-sweep-pipeline'
+      - '--region=us-central1'
+      - '--skaffold-file=skaffold.yaml'
+      - '--images=us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/sweeper-agent=us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/sweeper-agent:$SHORT_SHA'
+    id: 'create-release'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

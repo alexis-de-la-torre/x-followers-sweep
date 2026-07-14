@@ -1,0 +1,45 @@
+replicaCount: 1
+
+image:
+  repository: us-central1-docker.pkg.dev/adlt-s26/adlt-s26-repo/sweeper-agent
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+serviceAccount:
+  create: true
+  name: sweeper-agent
+  gcpServiceAccount: ""
+
+service:
+  type: ClusterIP
+  port: 8020
+
+# Chrome is heavy — needs at least 1GB RAM for headless rendering + VNC
+resources:
+  limits:
+    memory: 2Gi
+    cpu: "2"
+  requests:
+    memory: 1Gi
+    cpu: "0.5"
+
+# Persistent volume for Chrome profile (X login session survives restarts)
+chromeProfile:
+  storageSize: 2Gi
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 30
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 15
+
+# Env vars injected via ConfigMap (set per-environment in skaffold profiles)
+env: {}

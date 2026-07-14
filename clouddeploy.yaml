@@ -1,0 +1,14 @@
+# Register with: gcloud deploy apply --file=clouddeploy.yaml --region=us-central1 --project=adlt-s26
+apiVersion: deploy.cloud.google.com/v1
+kind: DeliveryPipeline
+metadata:
+  name: adlt-s26-x-followers-sweep-pipeline
+description: X Followers Sweep deployment pipeline
+serialPipeline:
+  stages:
+    - targetId: adlt-s26-staging
+      profiles:
+        - adlt-staging
+    - targetId: adlt-s26-prod
+      profiles:
+        - adlt-prod

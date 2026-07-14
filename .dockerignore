@@ -1,0 +1,11 @@
+.venv
+__pycache__
+*.pyc
+.env
+.git
+shots
+screenshots
+chrome-profile
+*.md
+*.json
+progress.json

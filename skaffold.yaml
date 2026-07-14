@@ -1,0 +1,44 @@
+apiVersion: skaffold/v4beta6
+kind: Config
+metadata:
+  name: x-followers-sweep
+build:
+  artifacts:
+    - image: us-central1-docker.pkg.dev/adlt-s26/adlt-s26-repo/sweeper-agent
+      context: .
+      docker:
+        dockerfile: services/sweeper-agent/Dockerfile
+deploy:
+  helm:
+    releases:
+      - name: sweeper-agent
+        chartPath: k8s/sweeper-agent
+        valuesFiles:
+          - k8s/sweeper-agent/values.yaml
+        setValues:
+          image.tag: "{{.IMAGE_TAG}}"
+profiles:
+  - name: adlt-staging
+    deploy:
+      helm:
+        releases:
+          - name: sweeper-agent
+            chartPath: k8s/sweeper-agent
+            valuesFiles:
+              - k8s/sweeper-agent/values.yaml
+            namespace: adlt-staging
+            setValueTemplates:
+              serviceAccount.gcpServiceAccount: "sweeper-agent@adlt-s26.iam.gserviceaccount.com"
+              env.OPENROUTER_API_KEY: "sk-or-..."
+  - name: adlt-prod
+    deploy:
+      helm:
+        releases:
+          - name: sweeper-agent
+            chartPath: k8s/sweeper-agent
+            valuesFiles:
+              - k8s/sweeper-agent/values.yaml
+            namespace: adlt-prod
+            setValueTemplates:
+              serviceAccount.gcpServiceAccount: "sweeper-agent@adlt-s26.iam.gserviceaccount.com"
+              env.OPENROUTER_API_KEY: "sk-or-..."
