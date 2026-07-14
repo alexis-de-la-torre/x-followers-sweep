@@ -21,11 +21,11 @@ service:
 
 resources:
   limits:
-    memory: 4Gi
-    cpu: "2"
+    memory: 2Gi
+    cpu: "1"
   requests:
-    memory: 512Mi
-    cpu: "0.25"
+    memory: 256Mi
+    cpu: "0.1"
 
 chromeProfile:
   storageSize: 2Gi
