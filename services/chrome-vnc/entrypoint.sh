@@ -64,6 +64,36 @@ for i in $(seq 1 30); do
 done
 
 echo "Ready. CDP: :$CDP_PORT, VNC: :$VNC_PORT, noVNC: :$NOVNC_PORT"
+
+# Chrome only listens on 127.0.0.1 despite --remote-debugging-address=0.0.0.0
+# Proxy 0.0.0.0:$CDP_PORT -> 127.0.0.1:$CDP_PORT so kubelet probes work
+python3 -c "
+import asyncio, socket
+
+async def proxy(client, target):
+    while True:
+        data = await asyncio.get_event_loop().sock_recv(client, 65536)
+        if not data: break
+        await asyncio.get_event_loop().sock_sendall(target, data)
+
+async def server():
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(('0.0.0.0', $CDP_PORT))
+    srv.listen(5)
+    srv.setblocking(False)
+    print(f'CDP proxy on 0.0.0.0:$CDP_PORT -> 127.0.0.1:$CDP_PORT')
+    while True:
+        client, _ = await asyncio.get_event_loop().sock_accept(srv)
+        target = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        target.connect(('127.0.0.1', $CDP_PORT))
+        asyncio.ensure_future(proxy(client, target))
+        asyncio.ensure_future(proxy(target, client))
+
+asyncio.run(server())
+" &
+sleep 1
+
 echo "All services running. Waiting forever..."
 
 # Keep container alive
