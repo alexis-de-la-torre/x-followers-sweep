@@ -68,6 +68,8 @@ fi
 
 # 6. Chrome
 echo "[6] Starting Chrome..."
+# Clear stale profile locks from previous pod runs
+rm -f "$CHROME_PROFILE_DIR"/SingletonLock "$CHROME_PROFILE_DIR"/SingletonCookie "$CHROME_PROFILE_DIR"/SingletonSocket 2>/dev/null
 google-chrome-stable \
     --disable-gpu \
     --no-sandbox \
