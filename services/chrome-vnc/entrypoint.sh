@@ -67,7 +67,23 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-echo "Ready. Proxy: :$CDP_PORT → Chrome :$CHROME_CDP_PORT, VNC: :$VNC_PORT, noVNC: :$NOVNC_PORT"
-echo "All services running. Waiting forever..."
+echo "[7] Starting cloudflared tunnel..."
+cloudflared tunnel --url "http://localhost:$NOVNC_PORT" > /tmp/cloudflared.log 2>&1 &
+CLOUDFLARE_PID=$!
+for i in $(seq 1 15); do
+    sleep 1
+    TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' /tmp/cloudflared.log 2>/dev/null | head -1)
+    if [ -n "$TUNNEL_URL" ]; then
+        echo "  Cloudflare tunnel: $TUNNEL_URL"
+        break
+    fi
+done
+
+echo "Ready. All services running."
+echo "  CDP proxy:  :$CDP_PORT → Chrome :$CHROME_CDP_PORT"
+echo "  VNC:        :$VNC_PORT"
+echo "  noVNC:      :$NOVNC_PORT"
+echo "  Cloudflare: $TUNNEL_URL"
+echo ""
 
 tail -f /dev/null
