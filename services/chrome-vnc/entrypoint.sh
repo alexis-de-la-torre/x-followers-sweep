@@ -38,10 +38,10 @@ echo "[4] Starting noVNC..."
     > /tmp/novnc.log 2>&1 &
 sleep 2
 
-# CDP proxy: accepts connections on 0.0.0.0:$CDP_PORT, forwards to 127.0.0.1:$CHROME_CDP_PORT
-# This is needed because Chrome ignores --remote-debugging-address=0.0.0.0
-echo "[5] Starting CDP proxy on 0.0.0.0:$CDP_PORT..."
-python3 /opt/cdp-proxy.py "$CDP_PORT" &
+# Chrome only listens on 127.0.0.1 despite --remote-debugging-address=0.0.0.0
+# CDP proxy: forwards 0.0.0.0:$CDP_PORT -> 127.0.0.1:$CHROME_CDP_PORT
+echo "[5] Starting CDP proxy on 0.0.0.0:$CDP_PORT -> 127.0.0.1:$CHROME_CDP_PORT..."
+python3 /opt/cdp-proxy.py "$CDP_PORT" "$CHROME_CDP_PORT" &
 sleep 1
 
 echo "[6] Starting Chrome on port $CHROME_CDP_PORT..."
@@ -59,7 +59,6 @@ google-chrome-stable \
     &
 CHROME_PID=$!
 
-# Wait for Chrome CDP on localhost:$CHROME_CDP_PORT
 for i in $(seq 1 30); do
     if curl -s "http://127.0.0.1:$CHROME_CDP_PORT/json/version" > /dev/null 2>&1; then
         echo "  Chrome ready (PID: $CHROME_PID, CDP on :$CHROME_CDP_PORT)"

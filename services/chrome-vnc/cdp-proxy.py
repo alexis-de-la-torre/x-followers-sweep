@@ -1,40 +1,39 @@
 #!/usr/bin/env python3
-"""CDP proxy: forwards 0.0.0.0:CDP_PORT -> 127.0.0.1:CDP_PORT"""
-import socket, sys, threading
+"""CDP proxy: forwards 0.0.0.0:LISTEN_PORT -> 127.0.0.1:TARGET_PORT"""
+import socket, sys, threading, os
 
-CDP_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 9222
+LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 9222
+TARGET_PORT = int(sys.argv[2]) if len(sys.argv) > 2 else LISTEN_PORT
 
 def forward(src, dst):
     while True:
         try:
             data = src.recv(65536)
-            if not data:
-                break
+            if not data: break
             dst.sendall(data)
-        except:
-            break
-    src.close()
-    dst.close()
+        except: break
+    for s in (src, dst):
+        try: s.close()
+        except: pass
 
-def main():
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(('0.0.0.0', CDP_PORT))
-    srv.listen(50)
-    srv.settimeout(None)
-    with open('/tmp/cdp-proxy.log', 'w') as f:
-        f.write(f'Proxy listening on 0.0.0.0:{CDP_PORT}\n')
-    while True:
-        client, addr = srv.accept()
-        target = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            target.connect(('127.0.0.1', CDP_PORT))
-            threading.Thread(target=forward, args=(client, target), daemon=True).start()
-            threading.Thread(target=forward, args=(target, client), daemon=True).start()
-        except Exception as e:
-            with open('/tmp/cdp-proxy.log', 'a') as f:
-                f.write(f'Connection from {addr} failed: {e}\n')
-            client.close()
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(('0.0.0.0', LISTEN_PORT))
+srv.listen(50)
+srv.settimeout(None)
 
-if __name__ == '__main__':
-    main()
+log = open('/tmp/cdp-proxy.log', 'w')
+log.write(f'Proxy 0.0.0.0:{LISTEN_PORT} -> 127.0.0.1:{TARGET_PORT} started\n')
+log.flush()
+
+while True:
+    client, addr = srv.accept()
+    target = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        target.connect(('127.0.0.1', TARGET_PORT))
+        threading.Thread(target=forward, args=(client, target), daemon=True).start()
+        threading.Thread(target=forward, args=(target, client), daemon=True).start()
+    except Exception as e:
+        log.write(f'Connection from {addr} failed: {e}\n')
+        log.flush()
+        client.close()
