@@ -12,7 +12,7 @@ serviceAccount:
 
 service:
   type: ClusterIP
-  port: 8020
+  port: 8080
 
 # Chrome is heavy — needs at least 1GB RAM for headless rendering + VNC
 resources:
