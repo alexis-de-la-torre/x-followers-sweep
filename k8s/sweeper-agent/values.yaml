@@ -17,15 +17,13 @@ service:
 # Chrome is heavy — needs at least 1GB RAM for headless rendering + VNC
 resources:
   limits:
-    memory: 2Gi
-    cpu: "2"
-  requests:
-    memory: 1Gi
+    memory: 512Mi
     cpu: "0.5"
+  requests:
+    memory: 256Mi
+    cpu: "0.1"
 
-# Persistent volume for Chrome profile (X login session survives restarts)
-chromeProfile:
-  storageSize: 2Gi
+# No Chrome profile needed — connects to chrome-vnc service
 
 livenessProbe:
   httpGet:

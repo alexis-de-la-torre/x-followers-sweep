@@ -1,0 +1,43 @@
+replicaCount: 1
+
+image:
+  repository: us-central1-docker.pkg.dev/adlt-s26/adlt-s26-repo/chrome-vnc
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+serviceAccount:
+  create: true
+  name: chrome-vnc
+
+service:
+  type: ClusterIP
+  ports:
+    - name: cdp
+      port: 9222
+      targetPort: 9222
+    - name: novnc
+      port: 8080
+      targetPort: 6080
+
+resources:
+  limits:
+    memory: 2Gi
+    cpu: "2"
+  requests:
+    memory: 1Gi
+    cpu: "0.5"
+
+chromeProfile:
+  storageSize: 2Gi
+
+livenessProbe:
+  tcpSocket:
+    port: 9222
+  initialDelaySeconds: 30
+  periodSeconds: 30
+
+readinessProbe:
+  tcpSocket:
+    port: 9222
+  initialDelaySeconds: 15
+  periodSeconds: 15

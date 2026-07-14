@@ -27,17 +27,9 @@ spec:
           ports:
             - name: http
               containerPort: 8020
-              protocol: TCP
-          volumeMounts:
-            - name: chrome-profile
-              mountPath: /chrome-profile
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
             {{- toYaml .Values.readinessProbe | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-      volumes:
-        - name: chrome-profile
-          persistentVolumeClaim:
-            claimName: {{ include "sweeper-agent.fullname" . }}-pvc

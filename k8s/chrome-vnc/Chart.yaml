@@ -1,0 +1,6 @@
+apiVersion: v2
+name: chrome-vnc
+description: Chrome + VNC browser access for X Followers Sweep
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

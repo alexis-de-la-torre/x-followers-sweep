@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "sweeper-agent.fullname" . }}-pvc
+  name: {{ include "chrome-vnc.fullname" . }}-pvc
   labels:
-    {{- include "sweeper-agent.labels" . | nindent 4 }}
+    {{- include "chrome-vnc.labels" . | nindent 4 }}
 spec:
   accessModes:
     - ReadWriteOnce

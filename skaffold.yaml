@@ -8,6 +8,10 @@ build:
       context: .
       docker:
         dockerfile: services/sweeper-agent/Dockerfile
+    - image: us-central1-docker.pkg.dev/adlt-s26/adlt-s26-repo/chrome-vnc
+      context: .
+      docker:
+        dockerfile: services/chrome-vnc/Dockerfile
 deploy:
   helm:
     releases:
@@ -16,7 +20,13 @@ deploy:
         valuesFiles:
           - k8s/sweeper-agent/values.yaml
         setValues:
-          image.tag: "{{.IMAGE_TAG}}"
+          image.tag: "{{.IMAGE_TAG_sweeper_agent}}"
+      - name: chrome-vnc
+        chartPath: k8s/chrome-vnc
+        valuesFiles:
+          - k8s/chrome-vnc/values.yaml
+        setValues:
+          image.tag: "{{.IMAGE_TAG_chrome_vnc}}"
 profiles:
   - name: adlt-staging
     deploy:
@@ -30,6 +40,11 @@ profiles:
             setValueTemplates:
               serviceAccount.gcpServiceAccount: "sweeper-agent@adlt-s26.iam.gserviceaccount.com"
               env.OPENROUTER_API_KEY: "sk-or-..."
+          - name: chrome-vnc
+            chartPath: k8s/chrome-vnc
+            valuesFiles:
+              - k8s/chrome-vnc/values.yaml
+            namespace: adlt-staging
   - name: adlt-prod
     deploy:
       helm:
@@ -42,3 +57,8 @@ profiles:
             setValueTemplates:
               serviceAccount.gcpServiceAccount: "sweeper-agent@adlt-s26.iam.gserviceaccount.com"
               env.OPENROUTER_API_KEY: "sk-or-..."
+          - name: chrome-vnc
+            chartPath: k8s/chrome-vnc
+            valuesFiles:
+              - k8s/chrome-vnc/values.yaml
+            namespace: adlt-prod
