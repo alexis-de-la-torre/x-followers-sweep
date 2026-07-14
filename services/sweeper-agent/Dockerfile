@@ -38,12 +38,12 @@ RUN git clone --depth 1 https://github.com/novnc/noVNC.git /opt/noVNC \
 WORKDIR /app
 
 # Python deps
-COPY requirements.txt .
+COPY services/sweeper-agent/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Service code
-COPY service.py tools.py ./
-COPY entrypoint.sh /entrypoint.sh
+COPY services/sweeper-agent/service.py services/sweeper-agent/tools.py ./
+COPY services/sweeper-agent/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 RUN mkdir -p /screenshots
