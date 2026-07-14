@@ -31,13 +31,19 @@ chromeProfile:
   storageSize: 2Gi
 
 livenessProbe:
-  tcpSocket:
-    port: 9222
+  exec:
+    command:
+      - python3
+      - -c
+      - "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 9222)); s.close()"
   initialDelaySeconds: 30
   periodSeconds: 30
 
 readinessProbe:
-  tcpSocket:
-    port: 9222
+  exec:
+    command:
+      - python3
+      - -c
+      - "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 9222)); s.close()"
   initialDelaySeconds: 15
   periodSeconds: 15

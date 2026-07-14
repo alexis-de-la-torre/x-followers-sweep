@@ -40,4 +40,5 @@ readinessProbe:
   periodSeconds: 15
 
 # Env vars injected via ConfigMap (set per-environment in skaffold profiles)
-env: {}
+env:
+  BROWSER_WS: "http://chrome-vnc:9222/json/version"
