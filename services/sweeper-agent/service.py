@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 
@@ -234,6 +235,18 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(title="X Cleanup Service v2 (LLM-driven)", version="2.0.0", lifespan=lifespan)
+
+# CORS for the web frontend (x-sweeper-web.s26.staging.adlt.dev)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://x-sweeper-web.s26.staging.adlt.dev",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 
 @app.post("/generate-candidates", response_model=CandidateResponse)
