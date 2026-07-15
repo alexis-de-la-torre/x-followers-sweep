@@ -1,5 +1,5 @@
 import { MantineProvider, ColorSchemeScript } from "@mantine/core";
-import AppLayout from "./components/AppLayout";
+import AppLayout from "@/components/AppLayout";
 import "./globals.css";
 
 export const metadata = {
