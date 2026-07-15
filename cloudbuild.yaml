@@ -46,6 +46,23 @@ steps:
       - 'us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/chrome-vnc:$SHORT_SHA'
     id: 'push-chrome-vnc'
 
+  # Build the x-sweeper-web frontend (Next.js standalone)
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/x-sweeper-web:$SHORT_SHA'
+      - '-f'
+      - 'services/x-sweeper-web/Dockerfile'
+      - 'services/x-sweeper-web'
+    id: 'build-x-sweeper-web'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/x-sweeper-web:$SHORT_SHA'
+    id: 'push-x-sweeper-web'
+
   # Create release in Cloud Deploy
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
@@ -57,7 +74,7 @@ steps:
       - '--delivery-pipeline=adlt-s26-x-followers-sweep-pipeline'
       - '--region=us-central1'
       - '--skaffold-file=skaffold.yaml'
-      - '--images=us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/sweeper-agent=us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/sweeper-agent:$SHORT_SHA,us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/chrome-vnc=us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/chrome-vnc:$SHORT_SHA'
+      - '--images=us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/sweeper-agent=us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/sweeper-agent:$SHORT_SHA,us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/chrome-vnc=us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/chrome-vnc:$SHORT_SHA,us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/x-sweeper-web=us-central1-docker.pkg.dev/$PROJECT_ID/adlt-s26-repo/x-sweeper-web:$SHORT_SHA'
     id: 'create-release'
 
 options:

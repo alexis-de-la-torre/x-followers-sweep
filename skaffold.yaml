@@ -12,6 +12,11 @@ build:
       context: .
       docker:
         dockerfile: services/chrome-vnc/Dockerfile
+    # X Sweeper web frontend — Next.js standalone server (see services/x-sweeper-web/README.md).
+    - image: us-central1-docker.pkg.dev/adlt-s26/adlt-s26-repo/x-sweeper-web
+      context: services/x-sweeper-web
+      docker:
+        dockerfile: Dockerfile
 deploy:
   helm:
     releases:
@@ -27,6 +32,12 @@ deploy:
           - k8s/chrome-vnc/values.yaml
         setValues:
           image.tag: "{{.IMAGE_TAG_chrome_vnc}}"
+      - name: x-sweeper-web
+        chartPath: k8s/x-sweeper-web
+        valuesFiles:
+          - k8s/x-sweeper-web/values.yaml
+        setValueTemplates:
+          image.tag: "{{.IMAGE_TAG_x_sweeper_web}}"
 profiles:
   - name: adlt-staging
     deploy:
@@ -44,6 +55,11 @@ profiles:
             chartPath: k8s/chrome-vnc
             valuesFiles:
               - k8s/chrome-vnc/values.yaml
+            namespace: adlt-staging
+          - name: x-sweeper-web
+            chartPath: k8s/x-sweeper-web
+            valuesFiles:
+              - k8s/x-sweeper-web/values.yaml
             namespace: adlt-staging
   - name: adlt-prod
     deploy:
