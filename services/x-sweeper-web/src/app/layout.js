@@ -13,7 +13,7 @@ export default function RootLayout({ children }) {
       <head>
         <ColorSchemeScript />
       </head>
-      <body>
+      <body suppressHydrationWarning>
         <MantineProvider>
           <AppLayout>{children}</AppLayout>
         </MantineProvider>
