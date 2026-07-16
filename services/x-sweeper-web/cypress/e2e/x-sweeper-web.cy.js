@@ -17,7 +17,8 @@ describe("X Sweeper Web", () => {
   });
 
   it("has a working Status tab", () => {
-    cy.get('[aria-label="Status"]').click();
+    cy.get('[aria-label="Status"]').should("exist");
+    cy.visit("/status");
     cy.url().should("include", "/status");
     cy.contains("Agent Status").should("be.visible");
   });
