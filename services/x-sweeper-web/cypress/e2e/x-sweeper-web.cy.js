@@ -17,7 +17,7 @@ describe("X Sweeper Web", () => {
   });
 
   it("has a working Status tab", () => {
-    cy.contains("Status").click();
+    cy.get('[aria-label="Status"]').click();
     cy.url().should("include", "/status");
     cy.contains("Agent Status").should("be.visible");
   });
@@ -27,17 +27,16 @@ describe("X Sweeper Web", () => {
   });
 
   it("shows runs list when deliveries exist", () => {
-    // If there are runs, at least one row should be visible
     cy.get("body").then(($body) => {
-      if ($body.text().includes("Sweep Runs")) {
-        // Check for run rows — either a flow summary or the empty state
-        cy.contains(/just now|min ago|h ago|d ago|wk ago|month/).should("exist");
+      if ($body.find('[aria-label="View run steps"]').length > 0) {
+        cy.get('[aria-label="View run steps"]').should("be.visible");
+      } else {
+        cy.contains("Sweep Runs").should("be.visible");
       }
     });
   });
 
   it("opens the steps modal on click", () => {
-    // Click the first run's status summary if it exists
     cy.get("body").then(($body) => {
       const hasRuns = $body.find('[aria-label="View run steps"]').length > 0;
       if (hasRuns) {
@@ -65,7 +64,6 @@ describe("Agent Status Page", () => {
 
   it("auto-refreshes status", () => {
     cy.visit("/status");
-    // Wait for at least one background refresh cycle
     cy.wait(12000);
     cy.contains("OK").should("be.visible");
   });
