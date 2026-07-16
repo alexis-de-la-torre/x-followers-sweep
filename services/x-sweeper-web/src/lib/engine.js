@@ -84,7 +84,9 @@ export async function fetchAgentStatus() {
   try {
     const r = await fetch(`${SWEEPER_AGENT_ADDR}/health`);
     if (!r.ok) return { service: "unreachable" };
-    return await r.json();
+    const text = await r.text();
+    // Try to parse as JSON, fall back to plain text
+    try { return JSON.parse(text); } catch { return { service: text, chrome: "ok" }; }
   } catch {
     return { service: "unreachable" };
   }
