@@ -101,6 +101,13 @@ export async function triggerRun({ id = crypto.randomUUID(), mode = "dry-run", c
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id, mode, count }),
   });
-  if (r.status !== 202) throw new Error(`HTTP ${r.status}`);
+  if (r.status !== 202) {
+    let detail = `HTTP ${r.status}`;
+    try {
+      const body = await r.json();
+      if (body?.detail) detail = body.detail;
+    } catch {}
+    throw new Error(detail);
+  }
   return await r.json();
 }
