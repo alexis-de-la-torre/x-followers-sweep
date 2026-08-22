@@ -4,3 +4,4 @@ openai>=1.0.0
 httpx>=0.26.0
 websockets>=12.0
 pydantic>=2.5.0
+google-cloud-pubsub>=2.25.0,<3.0.0

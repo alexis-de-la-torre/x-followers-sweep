@@ -92,25 +92,15 @@ export async function fetchAgentStatus() {
   }
 }
 
-// Trigger a new sweep run: generate candidates then review handles.
-export async function triggerRun({ mode, handles } = {}) {
-  if (handles && handles.length > 0) {
-    // Review specific handles
-    const r = await fetch(`${SWEEPER_AGENT_ADDR}/review-handles`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ handles, mode: mode || "dry-run" }),
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return await r.json();
-  } else {
-    // Generate candidates first
-    const r = await fetch(`${SWEEPER_AGENT_ADDR}/generate-candidates`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ count: 30 }),
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return await r.json();
-  }
+// Ask the agent to durably accept a sweep. The browser owns the
+// source identity so an uncertain response can later be retried with the same
+// id instead of creating unrelated work.
+export async function triggerRun({ id = crypto.randomUUID(), mode = "dry-run", count = 30 } = {}) {
+  const r = await fetch(`${SWEEPER_AGENT_ADDR}/api/v1/sweeps`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, mode, count }),
+  });
+  if (r.status !== 202) throw new Error(`HTTP ${r.status}`);
+  return await r.json();
 }

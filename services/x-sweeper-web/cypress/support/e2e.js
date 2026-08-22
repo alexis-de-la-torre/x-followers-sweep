@@ -1,8 +1,7 @@
-// Ignore React hydration errors from Mantine — they don't affect functionality
+import { isBenignUncaught } from "./uncaught";
+
+// Ignore only the known Mantine/Next development hydration mismatch. Every
+// other application exception remains fatal so the staging suite can go red.
 Cypress.on("uncaught:exception", (err) => {
-  // React error #418: hydration mismatch (Mantine CSS/theme vars)
-  if (err.message?.includes("Minified React error #418")) {
-    return false;
-  }
-  return true;
+  return isBenignUncaught(err) ? false : undefined;
 });
