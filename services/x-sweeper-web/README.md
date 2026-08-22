@@ -16,6 +16,17 @@ npm install
 npm run dev        # http://localhost:3000
 ```
 
+## Cypress against staging
+
+The SWP-4 acceptance spec uses the deployed web, sweeper-agent, and Outcome
+Engine. Its intercepts are passive request spies; no staging response is
+stubbed. The run creates a real dry-run delivery.
+
+```bash
+npm install
+npm run test:e2e:swp-4
+```
+
 ## Build / run (standalone)
 
 ```bash
