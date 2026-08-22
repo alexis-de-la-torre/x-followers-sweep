@@ -50,6 +50,11 @@ profiles:
             namespace: adlt-staging
             setValueTemplates:
               serviceAccount.gcpServiceAccount: "sweeper-agent@adlt-s26.iam.gserviceaccount.com"
+              env.SWEEPER_PLATFORM_ENABLED: "true"
+              env.GOOGLE_CLOUD_PROJECT: "adlt-s26"
+              env.PUBSUB_PREFIX: ""
+              env.SWEEPER_SUBSCRIPTION: "OUTCOME.DELIVERY.FULLFILLER.NOTIFICATIONS.NEW-TASK-TO-BE-DONE.sweeper-agent"
+              env.OUTCOME_ENGINE_URL: "http://outcome-engine:8080"
               env.OPENROUTER_API_KEY: "sk-or-..."
           - name: chrome-vnc
             chartPath: k8s/chrome-vnc

@@ -156,6 +156,7 @@ export default function RunsPage() {
   const [error, setError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [triggering, setTriggering] = useState(false);
+  const [triggerError, setTriggerError] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -177,11 +178,14 @@ export default function RunsPage() {
 
   const handleTrigger = async () => {
     setTriggering(true);
+    setTriggerError(null);
     try {
       await triggerRun({ mode: "dry-run" });
       // Refresh after a moment
       setTimeout(() => { retry(); setTriggering(false); }, 2000);
-    } catch {
+    } catch (e) {
+      console.error("Could not start sweep:", e);
+      setTriggerError(e instanceof Error ? e.message : "Could not start sweep");
       setTriggering(false);
     }
   };
@@ -213,6 +217,13 @@ export default function RunsPage() {
           <AgentStatusBar />
           <Divider mx="calc(-1 * var(--mantine-spacing-md))" />
         </Box>
+
+        {triggerError && (
+          <Alert mt="sm" color="red" icon={<IconAlertTriangle size={16} />} title="Could not start sweep"
+                 withCloseButton onClose={() => setTriggerError(null)}>
+            {triggerError}
+          </Alert>
+        )}
 
         {error ? (
           <Stack align="center" gap="xs" py="md">
