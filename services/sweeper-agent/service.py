@@ -14,6 +14,7 @@ import asyncio, json, os, re, time, uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -56,7 +57,23 @@ async def _get_cdp_url() -> str:
     url = BROWSER_WS_URL or "http://localhost:9222/json/version"
     async with httpx.AsyncClient(timeout=10) as hc:
         resp = await hc.get(url)
-        return resp.json()["webSocketDebuggerUrl"]
+        resp.raise_for_status()
+        debugger_url = resp.json()["webSocketDebuggerUrl"]
+
+    # Chrome builds this URL from the Host header. The CDP proxy must send a
+    # loopback Host so Chrome accepts the request, which means Chrome advertises
+    # 127.0.0.1 even when it is running in another pod. Keep Chrome's browser ID
+    # but connect through the configured discovery endpoint instead.
+    discovery = urlsplit(url)
+    debugger = urlsplit(debugger_url)
+    websocket_scheme = "wss" if discovery.scheme in {"https", "wss"} else "ws"
+    return urlunsplit((
+        websocket_scheme,
+        discovery.netloc,
+        debugger.path,
+        debugger.query,
+        debugger.fragment,
+    ))
 
 async def _connect_chrome():
     """Connect to Chrome CDP and attach to the first page. Returns (ws, psid)."""
@@ -290,8 +307,10 @@ async def review_handles(req: ReviewRequest):
 async def health():
     status = {"service": "ok", "model": JUDGE_MODEL}
     try:
-        ws, psid = await _connect_chrome()
-        await ws.close()
+        # Probes run frequently and have a short timeout. Checking Chrome's CDP
+        # discovery document proves it is reachable without opening and tearing
+        # down a browser WebSocket session for every liveness/readiness request.
+        await _get_cdp_url()
         status["chrome"] = "ok"
     except Exception as e:
         status["chrome"] = f"error: {e}"
