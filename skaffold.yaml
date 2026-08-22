@@ -50,7 +50,6 @@ profiles:
             namespace: adlt-staging
             setValueTemplates:
               serviceAccount.gcpServiceAccount: "sweeper-agent@adlt-s26.iam.gserviceaccount.com"
-              env.PUBSUB_PREFIX: ""
               env.OPENROUTER_API_KEY: "sk-or-..."
           - name: chrome-vnc
             chartPath: k8s/chrome-vnc
@@ -73,8 +72,6 @@ profiles:
             namespace: adlt-prod
             setValueTemplates:
               serviceAccount.gcpServiceAccount: "sweeper-agent@adlt-s26.iam.gserviceaccount.com"
-              env.PUBSUB_PREFIX: "PROD."
-              env.SWEEPER_SUBSCRIPTION: "PROD.OUTCOME.DELIVERY.FULLFILLER.NOTIFICATIONS.NEW-TASK-TO-BE-DONE.sweeper-agent"
               env.OPENROUTER_API_KEY: "sk-or-..."
           - name: chrome-vnc
             chartPath: k8s/chrome-vnc

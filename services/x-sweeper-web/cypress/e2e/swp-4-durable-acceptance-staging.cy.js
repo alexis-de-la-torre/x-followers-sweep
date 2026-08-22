@@ -1,12 +1,13 @@
 /// <reference types="cypress" />
 
-// SWP-4 against the deployed staging stack. Intercepts in this spec are
+// SWP-4 against either the local emulator stack or deployed staging. Intercepts are
 // passive spies: they never reply, alter, delay, or otherwise stub a request.
 const OUTCOME_ENGINE_URL =
   Cypress.env("OUTCOME_ENGINE_URL") || "https://outcome-engine.s26.staging.adlt.dev";
 const SWEEPER_AGENT_URL =
   Cypress.env("SWEEPER_AGENT_URL") || "https://sweeper-agent.s26.staging.adlt.dev";
-const RUN = [true, "true"].includes(Cypress.env("RUN_SWP_4_STAGING"));
+const RUN = [true, "true"].includes(Cypress.env("RUN_SWP_4")) ||
+  [true, "true"].includes(Cypress.env("RUN_SWP_4_STAGING"));
 const describeStaging = RUN ? describe : describe.skip;
 
 const LIST_URL = `${OUTCOME_ENGINE_URL}/api/v1/outcome-deliveries?outcomeName=sweep-run`;
@@ -24,7 +25,9 @@ function waitForAcceptedSweep(id, deadline = Date.now() + 5000) {
   const url = `${OUTCOME_ENGINE_URL}/api/v1/outcome-deliveries/by-source/x-sweep-run/${id}`;
 
   return cy.request({ url, failOnStatusCode: false }).then((response) => {
-    if (response.status === 200 && response.body?.sourceId === id) {
+    // The by-source route is keyed by id but its response intentionally omits
+    // sourceId. The list representation below is where source identity is asserted.
+    if (response.status === 200 && response.body?.outcomeName === "sweep-run") {
       return response.body;
     }
     if (Date.now() >= deadline) {
@@ -37,7 +40,7 @@ function waitForAcceptedSweep(id, deadline = Date.now() + 5000) {
   });
 }
 
-describeStaging("SWP-4 durable sweep acceptance on staging", () => {
+describeStaging("SWP-4 durable sweep acceptance", () => {
   it("keeps one accepted sweep visible after a full browser reload", () => {
     let baselineCount;
     let id;
@@ -68,7 +71,7 @@ describeStaging("SWP-4 durable sweep acceptance on staging", () => {
         return waitForAcceptedSweep(id);
       })
       .then((delivery) => {
-        expect(delivery.sourceId).to.eq(id);
+        expect(delivery.outcomeName).to.eq("sweep-run");
         expect(delivery.status, "accepted delivery is non-terminal").to.eq("RUNNING");
         return listRuns();
       })

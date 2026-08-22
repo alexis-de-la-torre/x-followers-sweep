@@ -42,8 +42,3 @@ readinessProbe:
 # Env vars injected via ConfigMap (set per-environment in skaffold profiles)
 env:
   BROWSER_WS: "http://chrome-vnc:9222/json/version"
-  SWEEPER_PLATFORM_ENABLED: "true"
-  GOOGLE_CLOUD_PROJECT: "adlt-s26"
-  PUBSUB_PREFIX: ""
-  SWEEPER_SUBSCRIPTION: "OUTCOME.DELIVERY.FULLFILLER.NOTIFICATIONS.NEW-TASK-TO-BE-DONE.sweeper-agent"
-  OUTCOME_ENGINE_URL: "http://outcome-engine:8080"

@@ -278,7 +278,7 @@ def _parse_json_array(text: str) -> list:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    platform_enabled = os.environ.get("SWEEPER_PLATFORM_ENABLED", "true").lower() in {"1", "true", "yes"}
+    platform_enabled = os.environ.get("SWEEPER_PLATFORM_ENABLED", "false").lower() in {"1", "true", "yes"}
     platform_runtime = None
     if platform_enabled:
         try:
