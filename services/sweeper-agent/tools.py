@@ -125,6 +125,59 @@ class BrowserTools:
         await asyncio.sleep(3)
         return f"Navigated to {url}"
 
+    async def collect_following_handles(self, count: int) -> list[str]:
+        """Collect unique handles from the authenticated account's Following list."""
+        if count < 1:
+            return []
+
+        await self.navigate("https://x.com/dlt_alx/following")
+        await self._evaluate("window.scrollTo(0, 0)")
+        await asyncio.sleep(1)
+
+        handles: list[str] = []
+        seen: set[str] = set()
+        stalled = 0
+        previous_size = 0
+
+        for _ in range(12):
+            raw = await self._evaluate(r"""
+                JSON.stringify(
+                    [...document.querySelectorAll('[data-testid="UserCell"]')]
+                        .map(cell => {
+                            const link = [...cell.querySelectorAll('a[href]')]
+                                .find(a => /^\/[A-Za-z0-9_]{1,15}$/.test(a.getAttribute('href') || ''));
+                            return link ? `@${link.getAttribute('href').slice(1)}` : null;
+                        })
+                        .filter(Boolean)
+                )
+            """)
+            try:
+                visible = json.loads(raw or "[]")
+            except (TypeError, json.JSONDecodeError):
+                visible = []
+
+            for handle in visible:
+                if not isinstance(handle, str):
+                    continue
+                key = handle.casefold()
+                if key == "@dlt_alx" or key in seen:
+                    continue
+                seen.add(key)
+                handles.append(handle)
+                if len(handles) == count:
+                    return handles
+
+            stalled = stalled + 1 if len(handles) == previous_size else 0
+            previous_size = len(handles)
+            if stalled >= 3:
+                break
+            await self.scroll(900)
+
+        page_text = await self.extract_page_text()
+        if "Log in" in page_text and "Sign up" in page_text:
+            raise RuntimeError("Chrome is not authenticated with X")
+        raise RuntimeError(f"Following list exposed {len(handles)} unique handles; {count} required")
+
     async def extract_profile(self) -> str:
         """Extract X profile info via JS."""
         js = """

@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, Box, Button, Container, Divider, Group, Modal, Stack, Text, UnstyledButton, Card, Skeleton, Badge } from "@mantine/core";
 import { IconAlertTriangle, IconBrandTwitterFilled, IconCheck, IconChecks, IconCircleDashed, IconClock, IconLoader2, IconPlayerPlay, IconX } from "@tabler/icons-react";
-import { fetchRuns, fetchAgentStatus, triggerRun, overallStatus, furthestStep, PIPELINE, STEP_LABEL } from "@/lib/engine";
+import { fetchRuns, fetchAgentStatus, triggerRun, overallStatus, furthestStep } from "@/lib/engine";
 import { fmtMs, fmtDateTime, fmtTime, fmtStamp, relativeTime } from "@/lib/format";
 
 // ─── Status glyphs ───
@@ -116,6 +116,50 @@ function RunSteps({ run }) {
   );
 }
 
+// ─── Persisted candidates and review decisions ───
+
+function SweepResults({ run }) {
+  if (!run.candidates.length) return null;
+
+  const reviewPending = run.reviews.length === 0 && overallStatus(run) === "IN_PROGRESS";
+  return (
+    <Stack gap="sm" mt="md" data-testid="sweep-results">
+      <Divider />
+      <Group gap="xs">
+        <Badge variant="light" color="blue">{run.summary.candidates} candidates</Badge>
+        {reviewPending ? (
+          <Badge variant="light" color="yellow">Review pending</Badge>
+        ) : (
+          <>
+            <Badge variant="light" color="gray">{run.summary.reviewed} reviewed</Badge>
+            <Badge variant="light" color="teal">{run.summary.keep} KEEP</Badge>
+            <Badge variant="light" color="orange">{run.summary.unfollow} UNFOLLOW</Badge>
+          </>
+        )}
+      </Group>
+
+      {run.reviews.length ? run.reviews.map((review) => (
+        <Card key={review.handle} withBorder radius="md" padding="sm"
+              data-testid={`review-${review.handle.replace(/^@/, "")}`}>
+          <Group justify="space-between" gap="xs" wrap="nowrap" align="flex-start">
+            <Text fw={600} size="sm">{review.handle}</Text>
+            <Badge color={review.decision === "KEEP" ? "teal" : "orange"} variant="light">
+              {review.decision}
+            </Badge>
+          </Group>
+          <Text size="xs" c="dimmed" mt={4}>{review.reason}</Text>
+        </Card>
+      )) : (
+        <Stack gap={4}>
+          {run.candidates.map((handle) => (
+            <Text key={handle} size="sm" ff="monospace">{handle}</Text>
+          ))}
+        </Stack>
+      )}
+    </Stack>
+  );
+}
+
 // ─── Agent status bar ───
 
 function AgentStatusBar() {
@@ -157,18 +201,28 @@ export default function RunsPage() {
   const [reloadKey, setReloadKey] = useState(0);
   const [triggering, setTriggering] = useState(false);
   const [triggerError, setTriggerError] = useState(null);
+  const [activeSweepId, setActiveSweepId] = useState(null);
 
   useEffect(() => {
     let active = true;
     setRuns(null);
     setError(false);
-    fetchRuns()
-      .then((mapped) => { if (active) setRuns(mapped); })
+    const refresh = () => fetchRuns()
+      .then((mapped) => {
+        if (!active) return;
+        setError(false);
+        setRuns(mapped);
+        setStepsRun((opened) => opened
+          ? mapped.find((run) => run.id === opened.id) || opened
+          : opened);
+      })
       .catch((e) => {
         console.error("Error fetching runs:", e);
         if (active) setError(true);
       });
-    return () => { active = false; };
+    refresh();
+    const interval = setInterval(refresh, 1000);
+    return () => { active = false; clearInterval(interval); };
   }, [reloadKey]);
 
   const retry = () => { setRuns(null); setError(false); setReloadKey((k) => k + 1); };
@@ -180,9 +234,10 @@ export default function RunsPage() {
     setTriggering(true);
     setTriggerError(null);
     try {
-      await triggerRun({ mode: "dry-run" });
-      // Refresh after a moment
-      setTimeout(() => { retry(); setTriggering(false); }, 2000);
+      const accepted = await triggerRun({ mode: "dry-run", count: 3 });
+      setActiveSweepId(accepted.id);
+      setTriggering(false);
+      setReloadKey((key) => key + 1);
     } catch (e) {
       console.error("Could not start sweep:", e);
       setTriggerError(e instanceof Error ? e.message : "Could not start sweep");
@@ -209,7 +264,7 @@ export default function RunsPage() {
                 </Text>
               )}
               <Button size="xs" variant="light" leftSection={<IconPlayerPlay size={14} />}
-                      loading={triggering} onClick={handleTrigger}>
+                      loading={triggering} onClick={handleTrigger} data-testid="new-sweep">
                 New Run
               </Button>
             </Group>
@@ -245,7 +300,8 @@ export default function RunsPage() {
         ) : runs.length > 0 ? (
           <Stack gap={0}>
             {runs.map((r, i) => (
-              <Box key={r.id}>
+              <Box key={r.id} data-sweep-id={r.sourceId}
+                   data-active-sweep={r.sourceId === activeSweepId ? "true" : undefined}>
                 {i > 0 && <Divider mx="calc(-1 * var(--mantine-spacing-md))" />}
                 <Box py="md">
                   <Group gap={8} wrap="nowrap" align="center">
@@ -271,6 +327,11 @@ export default function RunsPage() {
                     )}
                   </Group>
                   <RunStatusSummary run={r} onOpen={() => setStepsRun(r)} />
+                  {r.reviews.length > 0 && (
+                    <Text size="xs" c="dimmed" mt={6}>
+                      {r.summary.reviewed} reviewed · {r.summary.keep} KEEP · {r.summary.unfollow} UNFOLLOW
+                    </Text>
+                  )}
                 </Box>
               </Box>
             ))}
@@ -281,7 +342,7 @@ export default function RunsPage() {
             <Text size="sm" c="dimmed">No sweep runs yet.</Text>
             <Text size="xs" c="dimmed">Trigger a new run to get started.</Text>
             <Button size="xs" variant="light" mt="sm" leftSection={<IconPlayerPlay size={14} />}
-                    onClick={handleTrigger}>
+                    onClick={handleTrigger} data-testid="new-sweep">
               New Run
             </Button>
           </Stack>
@@ -301,6 +362,7 @@ export default function RunsPage() {
               {stepsRun.errorDetail}
             </Alert>
           )}
+          {stepsRun && <SweepResults run={stepsRun} />}
         </Modal>
       </Container>
     </Box>

@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""
-X Cleanup Service v2 — LLM-driven agent with browser tools.
-
-Uses DeepSeek V4 Flash via OpenRouter (OpenAI-compatible endpoint) with
-native function calling to drive Chrome CDP.
-
-POST /generate-candidates  — agent navigates /following, extracts handles, scores
-POST /review-handles       — agent reviews each profile, decides, screenshots, unfollows
-GET  /health               — Chrome + config check
-"""
+"""X cleanup fulfiller backed by authenticated Chrome and an LLM reviewer."""
 
 import asyncio, json, os, re, time, uuid
 from contextlib import asynccontextmanager
@@ -22,7 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 
-from tools import BrowserTools, BROWSER_TOOLS, execute_tool
+from tools import BrowserTools
 from platform_adapter import (
     DELIVER_TOPIC,
     GooglePubSubPublisher,
@@ -114,17 +105,20 @@ async def _connect_chrome():
         targets = await send("Target.getTargets")
         pages = [t for t in targets.get("targetInfos", []) if t["type"] == "page"]
 
-    attach = await send("Target.attachToTarget", {"targetId": pages[0]["targetId"], "flatten": True})
+    # Prefer the existing X tab so the fulfiller neither hijacks an unrelated
+    # authenticated tab nor depends on Target.getTargets ordering.
+    page = next((candidate for candidate in pages if candidate.get("url", "").startswith("https://x.com/")), pages[0])
+    attach = await send("Target.attachToTarget", {"targetId": page["targetId"], "flatten": True})
     psid = attach.get("sessionId", "")
     return ws, psid
 
-# ── LLM Agent Loop ────────────────────────────────────────────────────────
+# ── LLM review ────────────────────────────────────────────────────────────
 
-AGENT_SYSTEM_PROMPT = """You are an X (Twitter) cleanup assistant for @dlt_alx.
+REVIEW_SYSTEM_PROMPT = """You are an X (Twitter) cleanup reviewer for @dlt_alx.
 
-You have browser tools to navigate, extract profile data, take screenshots, and unfollow accounts.
-
-**Your task:** Review X accounts and decide whether to unfollow them.
+You receive profile evidence collected from an authenticated browser. Decide whether each
+account should be kept or marked as an unfollow candidate. This is a dry run: you only make
+and explain decisions; you never perform account changes.
 
 **UNFOLLOW when:**
 - Dead account (no posts, or last post >12 months ago)
@@ -141,94 +135,16 @@ You have browser tools to navigate, extract profile data, take screenshots, and 
 - Friend or acquaintance
 - Posted in last 6 months with genuine content
 
-**Tool flow for reviewing a handle:**
-1. navigate(url) to the profile
-2. extract_profile() to get post dates, bio, content
-3. Decide UNFOLLOW or KEEP
-4. If UNFOLLOW: screenshot() then click_unfollow()
-5. Report your decision
-
-When you have reviewed ALL handles, your final message MUST be ONLY a JSON array with NO other text:
+Return ONLY a JSON array with one item for every supplied profile, in the same order:
 [{"handle": "@name", "decision": "UNFOLLOW|KEEP", "reason": "..."}]
 
 No markdown, no code fences, no explanations after the JSON. Just the array."""
-
-REVIEW_TASK_TEMPLATE = """Review these X handles one by one. For each:
-1. Navigate to their profile
-2. Extract their profile data
-3. Decide UNFOLLOW or KEEP
-4. If UNFOLLOW: take a screenshot and unfollow
-5. Report the result
-
-Handles to review: {handles}
-Mode: {mode} (dry-run = screenshot only, no unfollow; execute = screenshot + unfollow)
-"""
-
-CANDIDATE_TASK = """Navigate to https://x.com/dlt_alx/following, scroll down repeatedly to load the following list, and extract as many handles as you can see. 
-
-For each handle you find, try to get their post count (the number shown on their row in the following list) and return a list of handles.
-
-After you've scrolled enough and collected handles, report the bottom 30 handles (the oldest follows — these are most likely dead).
-
-Return them as a JSON array: ["@handle1", "@handle2", ...]
-"""
-
-async def run_agent(task: str, tools: BrowserTools, max_steps: int = 25) -> str:
-    """Run the LLM agent loop. Returns the final response text."""
-    messages = [
-        {"role": "system", "content": AGENT_SYSTEM_PROMPT},
-        {"role": "user", "content": task}
-    ]
-
-    for step in range(max_steps):
-        # Call the LLM
-        resp = await client.chat.completions.create(
-            model=JUDGE_MODEL,
-            messages=messages,
-            tools=BROWSER_TOOLS,
-            tool_choice="auto",
-            max_tokens=2000,
-            temperature=0.1,
-        )
-
-        choice = resp.choices[0]
-        msg = choice.message
-
-        # If no tool calls, the agent is done
-        if not msg.tool_calls:
-            return msg.content or "No response"
-
-        # Process each tool call
-        messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": [
-            {"id": tc.id, "function": {"name": tc.function.name, "arguments": tc.function.arguments}, "type": "function"}
-            for tc in msg.tool_calls
-        ]})
-
-        for tc in msg.tool_calls:
-            name = tc.function.name
-            try:
-                args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-            except json.JSONDecodeError:
-                args = {}
-
-            result = await execute_tool(tools, name, args)
-
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": result
-            })
-
-        # Small delay between steps to avoid rate limits
-        await asyncio.sleep(0.5)
-
-    return "Max steps reached. Partial results:\n" + str(messages[-1].get("content", ""))
 
 # ── Models ─────────────────────────────────────────────────────────────────
 
 class ReviewRequest(BaseModel):
     handles: list[str]
-    mode: str = "dry-run"
+    mode: str = Field(default="dry-run", pattern="^dry-run$")
 
 class ReviewResult(BaseModel):
     handle: str
@@ -241,7 +157,7 @@ class ReviewResponse(BaseModel):
     results: list[ReviewResult]
 
 class CandidateRequest(BaseModel):
-    count: int = 30
+    count: int = Field(default=3, ge=1, le=30)
 
 class CandidateResponse(BaseModel):
     candidates: list[str]
@@ -250,7 +166,7 @@ class CandidateResponse(BaseModel):
 class SweepRequest(BaseModel):
     id: uuid.UUID
     mode: str = Field(default="dry-run", pattern="^dry-run$")
-    count: int = Field(default=30, ge=1, le=30)
+    count: int = Field(default=3, ge=1, le=30)
 
 class SweepAccepted(BaseModel):
     id: uuid.UUID
@@ -273,6 +189,67 @@ def _parse_json_array(text: str) -> list:
     if not isinstance(value, list):
         raise ValueError("agent response was not a JSON array")
     return value
+
+
+def _normalize_review_results(raw_results: list, handles: list[str]) -> list[dict]:
+    """Validate that the model reviewed every requested handle exactly once."""
+    expected = {handle.casefold(): handle for handle in handles}
+    normalized: dict[str, dict] = {}
+    for raw in raw_results:
+        if not isinstance(raw, dict):
+            raise ValueError("review result was not an object")
+        handle = str(raw.get("handle", "")).strip()
+        if handle and not handle.startswith("@"):
+            handle = f"@{handle}"
+        key = handle.casefold()
+        decision = str(raw.get("decision", "")).strip().upper()
+        reason = str(raw.get("reason", "")).strip()
+        if key not in expected:
+            raise ValueError(f"review returned an unexpected handle: {handle or '<missing>'}")
+        if key in normalized:
+            raise ValueError(f"review returned duplicate handle: {handle}")
+        if decision not in {"KEEP", "UNFOLLOW"}:
+            raise ValueError(f"review returned an invalid decision for {handle}")
+        if not reason:
+            raise ValueError(f"review returned no reason for {handle}")
+        normalized[key] = {
+            "handle": expected[key],
+            "decision": decision,
+            "reason": reason,
+        }
+    missing = [handle for handle in handles if handle.casefold() not in normalized]
+    if missing:
+        raise ValueError(f"review omitted handles: {', '.join(missing)}")
+    return [normalized[handle.casefold()] for handle in handles]
+
+
+async def _decide_reviews(profiles: list[dict], handles: list[str]) -> list[dict]:
+    """Ask the configured model for a complete, validated bounded review."""
+    prompt = "Review this browser evidence:\n" + json.dumps(profiles, ensure_ascii=False)
+    previous = ""
+    validation_error = ""
+    for attempt in range(2):
+        user_prompt = prompt
+        if attempt:
+            user_prompt += (
+                "\n\nYour previous response was invalid. Return the complete JSON array again."
+                f"\nValidation error: {validation_error}\nPrevious response: {previous}"
+            )
+        response = await client.chat.completions.create(
+            model=JUDGE_MODEL,
+            messages=[
+                {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=2000,
+            temperature=0.1,
+        )
+        previous = response.choices[0].message.content or ""
+        try:
+            return _normalize_review_results(_parse_json_array(previous), handles)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            validation_error = str(exc)
+    raise ValueError(f"agent did not return a complete review: {validation_error}")
 
 # ── FastAPI app ────────────────────────────────────────────────────────────
 
@@ -314,6 +291,7 @@ app.add_middleware(
     allow_origins=[
         "https://x-sweeper-web.s26.staging.adlt.dev",
         "http://localhost:3000",
+        "http://127.0.0.1:3000",
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
@@ -344,33 +322,48 @@ async def accept_sweep(req: SweepRequest):
 
 @app.post("/generate-candidates", response_model=CandidateResponse)
 async def generate_candidates(req: CandidateRequest):
-    """LLM-driven: navigate /following, scroll, extract handles, return list."""
+    """Read a bounded set of real handles from the authenticated Following list."""
     ws, psid = await _connect_chrome()
     try:
         bt = BrowserTools(ws, psid)
-        result_text = await run_agent(CANDIDATE_TASK, bt, max_steps=20)
-
-        raw_candidates = _parse_json_array(result_text)
-        candidates = [handle for handle in raw_candidates if isinstance(handle, str)][:req.count]
-        return CandidateResponse(candidates=candidates, total_found=len(raw_candidates))
+        candidates = await bt.collect_following_handles(req.count)
+        return CandidateResponse(candidates=candidates, total_found=len(candidates))
     finally:
         await ws.close()
 
 
 @app.post("/review-handles", response_model=ReviewResponse)
 async def review_handles(req: ReviewRequest):
-    """LLM-driven: review each handle, decide, screenshot + unfollow."""
+    """Collect real profile evidence and ask the configured model for dry-run decisions."""
     if not req.handles:
         raise HTTPException(400, "handles list is required")
+    if len({handle.casefold() for handle in req.handles}) != len(req.handles):
+        raise HTTPException(400, "handles must be unique")
 
     ws, psid = await _connect_chrome()
     try:
         bt = BrowserTools(ws, psid)
-        task = REVIEW_TASK_TEMPLATE.format(handles=json.dumps(req.handles), mode=req.mode)
-        result_text = await run_agent(task, bt, max_steps=len(req.handles) * 5 + 5)
+        profiles = []
+        for handle in req.handles:
+            await bt.navigate(f"https://x.com/{handle.lstrip('@')}")
+            raw_profile = await bt.extract_profile()
+            try:
+                profile = json.loads(raw_profile)
+            except (TypeError, json.JSONDecodeError):
+                profile = {"raw": raw_profile}
+            profiles.append({"handle": handle, **profile})
 
-        raw_results = _parse_json_array(result_text)
-        return ReviewResponse(results=[ReviewResult.model_validate(result) for result in raw_results])
+        decisions = await _decide_reviews(profiles, req.handles)
+        for decision in decisions:
+            if decision["decision"] != "UNFOLLOW":
+                continue
+            await bt.navigate(f"https://x.com/{decision['handle'].lstrip('@')}")
+            filename = f"dry_run_{decision['handle'].lstrip('@')}_{uuid.uuid4().hex[:8]}.png"
+            shot = await bt.screenshot(filename)
+            if shot.startswith("Screenshot saved to "):
+                decision["screenshot"] = shot.removeprefix("Screenshot saved to ")
+
+        return ReviewResponse(results=[ReviewResult.model_validate(result) for result in decisions])
     finally:
         await ws.close()
 

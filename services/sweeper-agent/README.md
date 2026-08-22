@@ -8,7 +8,7 @@ Required local endpoints:
 
 - Pub/Sub emulator: `127.0.0.1:8085`
 - Outcome Engine: `127.0.0.1:8090`
-- Chrome CDP: `127.0.0.1:9222`
+- Authenticated Chrome CDP: `127.0.0.1:9222`
 - Sweeper agent: `127.0.0.1:8020`
 - X Sweeper web: `127.0.0.1:3000`
 
@@ -32,9 +32,20 @@ BROWSER_WS=http://127.0.0.1:9222/json/version \
 uvicorn service:app --host 127.0.0.1 --port 8020
 ```
 
+The demo flow is deliberately bounded to three candidates. Candidate handles
+come from the live Following page, profile evidence comes from live X pages,
+and the configured model returns the persisted KEEP/UNFOLLOW decision and
+reason. Dry runs never call an unfollow action.
+
 With the local web and Outcome Engine running, execute the acceptance journey:
 
 ```bash
 cd ../x-sweeper-web
 npm run test:e2e:swp-4:local -- --browser chrome
+```
+
+For the complete SWP-6 two-stage journey and its flow screenshots:
+
+```bash
+npm run test:e2e:swp-6:local -- --browser chrome
 ```

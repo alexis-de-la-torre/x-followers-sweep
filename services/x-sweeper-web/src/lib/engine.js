@@ -25,8 +25,14 @@ export function stepStatus(step) {
 // Delivery → run mapping (mirrors short-form-gen's toFlow).
 export function toRun(d) {
   let ctx = {};
-  try { ctx = JSON.parse(d.context || "{}"); } catch {}
+  try { ctx = typeof d.context === "string" ? JSON.parse(d.context || "{}") : d.context || {}; } catch {}
   const params = ctx.params || {};
+  const candidates = Array.isArray(ctx.candidates)
+    ? [...new Set(ctx.candidates.filter((handle) => typeof handle === "string"))]
+    : [];
+  const reviews = Array.isArray(ctx.reviews)
+    ? ctx.reviews.filter((review) => review && typeof review.handle === "string")
+    : [];
   const engineSteps = d.steps || [];
   const present = new Set(engineSteps.map((s) => s.taskName));
   const orderedKeys = [...engineSteps.map((s) => s.taskName), ...PIPELINE.filter((k) => !present.has(k))];
@@ -53,6 +59,14 @@ export function toRun(d) {
     createdAt: d.createdAt,
     lastActivityAt: d.updatedAt || d.createdAt,
     errorDetail: failed?.detail ?? null,
+    candidates,
+    reviews,
+    summary: {
+      candidates: candidates.length,
+      reviewed: reviews.length,
+      keep: reviews.filter((review) => review.decision === "KEEP").length,
+      unfollow: reviews.filter((review) => review.decision === "UNFOLLOW").length,
+    },
     steps,
   };
 }
@@ -95,7 +109,7 @@ export async function fetchAgentStatus() {
 // Ask the agent to durably accept a sweep. The browser owns the
 // source identity so an uncertain response can later be retried with the same
 // id instead of creating unrelated work.
-export async function triggerRun({ id = crypto.randomUUID(), mode = "dry-run", count = 30 } = {}) {
+export async function triggerRun({ id = crypto.randomUUID(), mode = "dry-run", count = 3 } = {}) {
   const r = await fetch(`${SWEEPER_AGENT_ADDR}/api/v1/sweeps`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
