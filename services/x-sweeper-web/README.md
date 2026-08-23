@@ -45,6 +45,23 @@ npx cypress run \
   --env RUN_SWP_33=true,STAGING_RELEASE=xfs-abcdef0,EXISTING_SWEEP_ID=00000000-0000-4000-8000-000000000000
 ```
 
+SWP-34 proves the advertised 500-account ceiling through the same real staging
+boundary. It is separately opt-in because it performs a paid X read and 25
+bounded model-review calls. Allow up to 45 minutes for a fresh run.
+
+```bash
+STAGING_RELEASE=xfs-abcdef0 npm run test:e2e:swp-34
+```
+
+The terminal UI and storage recovery can be replayed without a second paid run:
+
+```bash
+npx cypress run \
+  --spec cypress/e2e/swp-34-500-account-review-staging.cy.js \
+  --config baseUrl=https://x-sweeper-web.s26.staging.adlt.dev \
+  --env RUN_SWP_34=true,STAGING_RELEASE=xfs-abcdef0,EXISTING_SWEEP_ID=00000000-0000-4000-8000-000000000000
+```
+
 ## Cypress against the local SWP-38 stack
 
 The SWP-38 spec is destructive and skipped unless explicitly enabled. It uses
