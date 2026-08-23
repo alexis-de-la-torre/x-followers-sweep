@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, Box, Button, Container, Divider, Group, Modal, Stack, Text, UnstyledButton, Card, Skeleton, Badge } from "@mantine/core";
 import { IconAlertTriangle, IconBrandTwitterFilled, IconCheck, IconChecks, IconCircleDashed, IconClock, IconLoader2, IconPlayerPlay, IconX } from "@tabler/icons-react";
-import { fetchRuns, fetchAgentStatus, triggerRun, overallStatus, furthestStep } from "@/lib/engine";
+import { fetchRuns, fetchAgentStatus, triggerRun, triggerUnfollow, overallStatus, furthestStep } from "@/lib/engine";
 import { fmtMs, fmtDateTime, fmtTime, fmtStamp, relativeTime } from "@/lib/format";
 
 // ─── Status glyphs ───
@@ -118,7 +118,7 @@ function RunSteps({ run }) {
 
 // ─── Persisted candidates and review decisions ───
 
-function SweepResults({ run }) {
+function SweepResults({ run, onRequestUnfollow }) {
   if (!run.candidates.length) return null;
 
   const reviewPending = run.reviews.length === 0 && overallStatus(run) === "IN_PROGRESS";
@@ -148,6 +148,30 @@ function SweepResults({ run }) {
             </Badge>
           </Group>
           <Text size="xs" c="dimmed" mt={4}>{review.reason}</Text>
+          {review.decision === "UNFOLLOW" && (
+            <Box mt="xs">
+              {review.application?.status === "APPLIED" ? (
+                <Text size="xs" c="teal.7" fw={600}>
+                  {review.handle} unfollowed
+                </Text>
+              ) : review.application?.status === "APPLYING" ? (
+                <Button size="compact-xs" variant="light" color="orange" loading disabled>
+                  Applying unfollow
+                </Button>
+              ) : (
+                <>
+                  {review.application?.status === "FAILED" && (
+                    <Text size="xs" c="red.7" mb={4}>{review.application.detail || "Unfollow failed"}</Text>
+                  )}
+                  <Button size="compact-xs" variant="light" color="orange"
+                          onClick={() => onRequestUnfollow(review)}
+                          data-testid={`apply-${review.handle.replace(/^@/, "")}`}>
+                    Unfollow
+                  </Button>
+                </>
+              )}
+            </Box>
+          )}
         </Card>
       )) : (
         <Stack gap={4}>
@@ -202,6 +226,9 @@ export default function RunsPage() {
   const [triggering, setTriggering] = useState(false);
   const [triggerError, setTriggerError] = useState(null);
   const [activeSweepId, setActiveSweepId] = useState(null);
+  const [confirmUnfollow, setConfirmUnfollow] = useState(null);
+  const [applyingUnfollow, setApplyingUnfollow] = useState(false);
+  const [unfollowError, setUnfollowError] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -242,6 +269,21 @@ export default function RunsPage() {
       console.error("Could not start sweep:", e);
       setTriggerError(e instanceof Error ? e.message : "Could not start sweep");
       setTriggering(false);
+    }
+  };
+
+  const handleUnfollow = async () => {
+    if (!confirmUnfollow || applyingUnfollow) return;
+    setApplyingUnfollow(true);
+    setUnfollowError(null);
+    try {
+      await triggerUnfollow({ sweepId: stepsRun.sourceId, handle: confirmUnfollow.handle });
+      setConfirmUnfollow(null);
+      setReloadKey((key) => key + 1);
+    } catch (e) {
+      setUnfollowError(e instanceof Error ? e.message : "Could not apply unfollow");
+    } finally {
+      setApplyingUnfollow(false);
     }
   };
 
@@ -362,7 +404,24 @@ export default function RunsPage() {
               {stepsRun.errorDetail}
             </Alert>
           )}
-          {stepsRun && <SweepResults run={stepsRun} />}
+          {stepsRun && <SweepResults run={stepsRun} onRequestUnfollow={setConfirmUnfollow} />}
+        </Modal>
+
+        <Modal opened={!!confirmUnfollow} onClose={() => !applyingUnfollow && setConfirmUnfollow(null)}
+               centered size="xs" radius="md" title="Confirm unfollow">
+          <Stack gap="sm">
+            <Text size="sm">
+              Unfollow <Text span fw={700}>{confirmUnfollow?.handle}</Text> from this reviewed sweep?
+            </Text>
+            {unfollowError && <Alert color="red">{unfollowError}</Alert>}
+            <Group justify="flex-end">
+              <Button variant="default" size="xs" disabled={applyingUnfollow}
+                      onClick={() => setConfirmUnfollow(null)}>Cancel</Button>
+              <Button color="orange" size="xs" loading={applyingUnfollow} onClick={handleUnfollow}>
+                Unfollow
+              </Button>
+            </Group>
+          </Stack>
         </Modal>
       </Container>
     </Box>

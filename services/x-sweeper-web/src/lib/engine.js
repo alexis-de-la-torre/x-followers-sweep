@@ -71,6 +71,21 @@ export function toRun(d) {
   };
 }
 
+export function toUnfollow(d) {
+  let ctx = {};
+  try { ctx = typeof d.context === "string" ? JSON.parse(d.context || "{}") : d.context || {}; } catch {}
+  const step = (d.steps || []).find((candidate) => candidate.taskName === "apply-unfollow");
+  const result = ctx.unfollow || {};
+  return {
+    id: d.sourceId,
+    sweepId: ctx.sweepId,
+    handle: result.handle || ctx.handle,
+    status: result.status === "APPLIED" ? "APPLIED" : step?.result && step.result !== "SUCCESS" ? "FAILED" : "APPLYING",
+    appliedAt: result.appliedAt || null,
+    detail: step?.detail || null,
+  };
+}
+
 export function overallStatus(run) {
   if (run.steps.some((s) => s.status === "FAILED")) return "FAILED";
   if (run.steps.every((s) => s.status === "DONE")) return "DONE";
@@ -86,10 +101,27 @@ export function furthestStep(run) {
 
 // Fetch runs from the outcome-engine.
 export async function fetchRuns() {
-  const r = await fetch(`${OUTCOME_ENGINE_ADDR}/api/v1/outcome-deliveries?outcomeName=sweep-run`);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const data = await r.json();
-  return (Array.isArray(data) ? data : []).map(toRun)
+  const [runsResponse, unfollowsResponse] = await Promise.all([
+    fetch(`${OUTCOME_ENGINE_ADDR}/api/v1/outcome-deliveries?outcomeName=sweep-run`),
+    fetch(`${OUTCOME_ENGINE_ADDR}/api/v1/outcome-deliveries?outcomeName=sweep-unfollow`),
+  ]);
+  if (!runsResponse.ok) throw new Error(`HTTP ${runsResponse.status}`);
+  if (!unfollowsResponse.ok) throw new Error(`HTTP ${unfollowsResponse.status}`);
+  const [runData, unfollowData] = await Promise.all([runsResponse.json(), unfollowsResponse.json()]);
+  const applications = (Array.isArray(unfollowData) ? unfollowData : []).map(toUnfollow);
+  const latestByDecision = new Map();
+  for (const application of applications) {
+    const key = `${application.sweepId}:${String(application.handle).toLowerCase()}`;
+    if (!latestByDecision.has(key)) latestByDecision.set(key, application);
+  }
+  return (Array.isArray(runData) ? runData : []).map(toRun)
+    .map((run) => ({
+      ...run,
+      reviews: run.reviews.map((review) => ({
+        ...review,
+        application: latestByDecision.get(`${run.sourceId}:${review.handle.toLowerCase()}`) || null,
+      })),
+    }))
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
@@ -114,6 +146,23 @@ export async function triggerRun({ id = crypto.randomUUID(), mode = "dry-run", c
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id, mode, count }),
+  });
+  if (r.status !== 202) {
+    let detail = `HTTP ${r.status}`;
+    try {
+      const body = await r.json();
+      if (body?.detail) detail = body.detail;
+    } catch {}
+    throw new Error(detail);
+  }
+  return await r.json();
+}
+
+export async function triggerUnfollow({ sweepId, handle, id = crypto.randomUUID() }) {
+  const r = await fetch(`${SWEEPER_AGENT_ADDR}/api/v1/sweeps/${sweepId}/unfollows`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, handle }),
   });
   if (r.status !== 202) {
     let detail = `HTTP ${r.status}`;

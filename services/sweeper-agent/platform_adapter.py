@@ -41,6 +41,8 @@ class SweepExecutor(Protocol):
 
     async def review_handles(self, handles: list[str], mode: str) -> list[dict[str, Any]]: ...
 
+    async def apply_unfollow(self, handle: str) -> dict[str, Any]: ...
+
 
 ContextLoader = Callable[[str], Awaitable[dict[str, Any]] | dict[str, Any]]
 
@@ -100,6 +102,44 @@ def sweep_delivery_command(sweep_id: str, mode: str, count: int) -> dict[str, An
                 {"from": "generate-candidates", "to": "review-handles"},
                 {"from": "review-handles", "to": "END"},
             ],
+        },
+    }
+
+
+def unfollow_delivery_command(
+    unfollow_id: str,
+    sweep_id: str,
+    sweep_delivery_id: str,
+    handle: str,
+) -> dict[str, Any]:
+    """Build a separately user-triggered delivery for one reviewed decision."""
+
+    return {
+        "sourceType": "x-sweep-unfollow",
+        "sourceId": unfollow_id,
+        "prospectId": None,
+        "outcomeName": "sweep-unfollow",
+        "outcomeDeliveryContext": {
+            "origin": FULFILLER_NAME,
+            "sweepId": sweep_id,
+            "sweepDeliveryId": sweep_delivery_id,
+            "handle": handle,
+        },
+        "flow": {
+            "id": "default",
+            "name": "sweep-unfollow-default",
+            "definitionVersion": "v1",
+            "steps": [
+                {
+                    "id": "apply-unfollow",
+                    "name": "apply-unfollow",
+                    "type": "task",
+                    "fulfiller": {"id": FULFILLER_NAME, "name": FULFILLER_NAME},
+                    "requirements": [],
+                    "continueFlowOnFail": False,
+                }
+            ],
+            "adjacencyList": [{"from": "apply-unfollow", "to": "END"}],
         },
     }
 
@@ -222,6 +262,11 @@ class SweepTaskHandler:
             candidates = context.get("candidates", [])
             reviews = await self.executor.review_handles(candidates, str(params.get("mode", "dry-run")))
             return {"reviews": reviews}
+        if task.outcome_task_name == "apply-unfollow":
+            handle = str(context.get("handle", ""))
+            if not handle:
+                raise ValueError("MISSING_UNFOLLOW_HANDLE")
+            return {"unfollow": await self.executor.apply_unfollow(handle)}
         raise ValueError(f"UNKNOWN_TASK: {task.outcome_task_name}")
 
     @staticmethod
@@ -313,6 +358,33 @@ class OutcomeEngineContextLoader:
         if not isinstance(context, dict):
             raise ValueError("Outcome Engine returned a non-object delivery context")
         return context
+
+
+class OutcomeEngineSweepLoader:
+    """Resolve a persisted sweep and its context from its product-owned identity."""
+
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url.rstrip("/")
+
+    async def __call__(self, sweep_id: str) -> dict[str, Any]:
+        import httpx
+
+        state_url = f"{self.base_url}/api/v1/outcome-deliveries/by-source/x-sweep-run/{sweep_id}"
+        async with httpx.AsyncClient(timeout=20) as client:
+            state_response = await client.get(state_url)
+            state_response.raise_for_status()
+            state = state_response.json()
+            delivery_id = str(state.get("deliveryId", "")) if isinstance(state, dict) else ""
+            if not delivery_id:
+                raise ValueError("Outcome Engine returned a sweep without a delivery id")
+            context_response = await client.get(
+                f"{self.base_url}/api/v1/outcome-deliveries/{delivery_id}/context"
+            )
+            context_response.raise_for_status()
+            context = context_response.json()
+        if not isinstance(context, dict):
+            raise ValueError("Outcome Engine returned a non-object sweep context")
+        return {"deliveryId": delivery_id, "sourceId": sweep_id, "context": context}
 
 
 class PubSubRuntime:

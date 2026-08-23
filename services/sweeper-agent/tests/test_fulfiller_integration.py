@@ -82,6 +82,7 @@ class RecordingExecutor:
         self.fail = fail
         self.generate_calls: list[int] = []
         self.review_calls: list[tuple[list[str], str]] = []
+        self.unfollow_calls: list[str] = []
 
     async def generate_candidates(self, count: int) -> list[str]:
         self.events.append("execute:generate")
@@ -94,6 +95,11 @@ class RecordingExecutor:
         self.events.append("execute:review")
         self.review_calls.append((handles, mode))
         return [{"handle": handle, "decision": "KEEP"} for handle in handles]
+
+    async def apply_unfollow(self, handle: str) -> dict:
+        self.events.append("execute:unfollow")
+        self.unfollow_calls.append(handle)
+        return {"handle": handle, "status": "APPLIED", "appliedAt": "2026-08-23T12:00:00+00:00"}
 
 
 def run(coro) -> None:
@@ -155,6 +161,30 @@ def test_review_task_reads_candidates_from_persisted_delivery_context() -> None:
             {"handle": "@two", "decision": "KEEP"},
         ]
     }
+
+
+def test_apply_unfollow_task_uses_the_authorized_handle_and_persists_its_result() -> None:
+    events: list[str] = []
+    publisher = RecordingPublisher(events)
+    executor = RecordingExecutor(events)
+    broker_ack = RecordingBrokerAck(events)
+    handler = SweepTaskHandler(
+        publisher,
+        executor,
+        lambda _: {"sweepId": "sweep-1", "handle": "@reviewed"},
+    )
+
+    run(handler.handle(new_task("apply-unfollow", "task-unfollow"), {}, broker_ack))
+
+    assert executor.unfollow_calls == ["@reviewed"]
+    assert publisher.messages[-1][1]["contextPatch"] == {
+        "unfollow": {
+            "handle": "@reviewed",
+            "status": "APPLIED",
+            "appliedAt": "2026-08-23T12:00:00+00:00",
+        }
+    }
+    assert broker_ack.acked == 1
 
 
 def test_failed_work_reports_terminal_failure_before_broker_ack() -> None:
