@@ -51,14 +51,17 @@ describe("X Sweeper Web", () => {
     cy.get('[data-testid="auto-unfollow"]').should("be.checked");
   });
 
-  it("configures and persists sweeps larger than three accounts", () => {
+  it("offers and persists sweep sizes up to 500 accounts", () => {
     cy.visit("/config");
     cy.get('[data-testid="settings-page"]').should("have.attr", "data-settings-ready", "true");
     cy.get('[data-testid="sweep-count"]').should("have.value", "3 accounts").click();
-    cy.get('[role="option"]').contains("10 accounts").click();
-    cy.get('[data-testid="sweep-count"]').should("have.value", "10 accounts");
+    for (const count of [50, 100, 200, 500]) {
+      cy.get('[role="option"]').contains(`${count} accounts`).should("exist");
+    }
+    cy.get('[role="option"]').contains("500 accounts").scrollIntoView().click();
+    cy.get('[data-testid="sweep-count"]').should("have.value", "500 accounts");
     cy.reload();
-    cy.get('[data-testid="sweep-count"]').should("have.value", "10 accounts");
+    cy.get('[data-testid="sweep-count"]').should("have.value", "500 accounts");
   });
 
   it("shows runs list when deliveries exist", () => {

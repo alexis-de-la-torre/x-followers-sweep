@@ -175,7 +175,7 @@ def test_accepts_a_dry_run_and_publishes_the_pinned_two_step_flow(
 ) -> None:
     response = client.post(
         "/api/v1/sweeps",
-        json={"id": SWEEP_ID, "mode": "dry-run", "count": 30},
+        json={"id": SWEEP_ID, "mode": "dry-run", "count": 500},
     )
 
     assert response.status_code == 202
@@ -193,7 +193,7 @@ def test_accepts_a_dry_run_and_publishes_the_pinned_two_step_flow(
 
     context = command["outcomeDeliveryContext"]
     assert context["origin"] == "sweeper-agent"
-    assert context["params"] == {"mode": "dry-run", "count": 30}
+    assert context["params"] == {"mode": "dry-run", "count": 500}
 
     assert command["flow"] == {
         "id": "default",
@@ -257,7 +257,7 @@ def test_accepts_auto_unfollow_as_a_pinned_three_step_flow(
         {"id": "not-a-uuid", "mode": "dry-run", "count": 30},
         {"id": SWEEP_ID, "mode": "execute", "count": 30},
         {"id": SWEEP_ID, "mode": "dry-run", "count": 0},
-        {"id": SWEEP_ID, "mode": "dry-run", "count": 31},
+        {"id": SWEEP_ID, "mode": "dry-run", "count": 501},
     ],
 )
 def test_rejects_invalid_or_unsafe_sweep_requests_before_publication(

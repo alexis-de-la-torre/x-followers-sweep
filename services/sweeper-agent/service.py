@@ -160,7 +160,7 @@ class ReviewResponse(BaseModel):
     results: list[ReviewResult]
 
 class CandidateRequest(BaseModel):
-    count: int = Field(default=3, ge=1, le=30)
+    count: int = Field(default=3, ge=1, le=500)
 
 class CandidateResponse(BaseModel):
     candidates: list[str]
@@ -169,7 +169,7 @@ class CandidateResponse(BaseModel):
 class SweepRequest(BaseModel):
     id: uuid.UUID
     mode: str = Field(default="dry-run", pattern="^(dry-run|auto-unfollow)$")
-    count: int = Field(default=3, ge=1, le=30)
+    count: int = Field(default=3, ge=1, le=500)
 
 class SweepAccepted(BaseModel):
     id: uuid.UUID
@@ -231,8 +231,11 @@ def _normalize_review_results(raw_results: list, handles: list[str]) -> list[dic
     return [normalized[handle.casefold()] for handle in handles]
 
 
-async def _decide_reviews(profiles: list[dict], handles: list[str]) -> list[dict]:
-    """Ask the configured model for a complete, validated bounded review."""
+REVIEW_BATCH_SIZE = 20
+
+
+async def _decide_review_batch(profiles: list[dict], handles: list[str]) -> list[dict]:
+    """Ask the configured model for one complete, validated bounded review batch."""
     prompt = "Review this browser evidence:\n" + json.dumps(profiles, ensure_ascii=False)
     previous = ""
     validation_error = ""
@@ -258,6 +261,15 @@ async def _decide_reviews(profiles: list[dict], handles: list[str]) -> list[dict
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             validation_error = str(exc)
     raise ValueError(f"agent did not return a complete review: {validation_error}")
+
+
+async def _decide_reviews(profiles: list[dict], handles: list[str]) -> list[dict]:
+    """Review large sweeps in bounded model calls while preserving handle order."""
+    results = []
+    for start in range(0, len(handles), REVIEW_BATCH_SIZE):
+        end = start + REVIEW_BATCH_SIZE
+        results.extend(await _decide_review_batch(profiles[start:end], handles[start:end]))
+    return results
 
 # ── FastAPI app ────────────────────────────────────────────────────────────
 

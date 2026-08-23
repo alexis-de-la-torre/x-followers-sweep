@@ -61,7 +61,7 @@ export default function ConfigPage() {
               <Box style={{ flex: 1 }}>
                 <Text fw={600} size="sm">Accounts per sweep</Text>
                 <Text size="xs" c="dimmed" mt={2} mb="sm">
-                  Choose how many accounts the agent should review in each new sweep, up to 30.
+                  Choose how many accounts the agent should review in each new sweep, up to 500.
                 </Text>
                 <Select
                   aria-label="Accounts per sweep"
@@ -70,6 +70,10 @@ export default function ConfigPage() {
                     { value: "10", label: "10 accounts" },
                     { value: "20", label: "20 accounts" },
                     { value: "30", label: "30 accounts" },
+                    { value: "50", label: "50 accounts" },
+                    { value: "100", label: "100 accounts" },
+                    { value: "200", label: "200 accounts" },
+                    { value: "500", label: "500 accounts" },
                   ]}
                   value={String(sweepCount)}
                   disabled={!ready}
