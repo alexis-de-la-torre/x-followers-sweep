@@ -32,8 +32,10 @@ OUTCOME_ENGINE_URL=http://127.0.0.1:8090 \
 uvicorn service:app --host 127.0.0.1 --port 8020
 ```
 
-M1 moves reads only. Until the target-ID delete slice lands, explicit and
-automatic unfollow tasks continue using `BrowserSweepExecutor`.
+With the adapter configured, an explicitly confirmed reviewed unfollow uses the
+persisted stable X user ID, verifies the relationship before and after, and
+applies the change through the official X API. Automatic batch unfollow remains
+outside this boundary.
 
 Initialize the emulator after it starts:
 

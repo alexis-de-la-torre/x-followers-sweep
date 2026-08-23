@@ -15,15 +15,21 @@ import org.springframework.web.client.RestClientResponseException;
 
 import static dev.adlt.xapi.client.XApiDocuments.FollowingEnvelope;
 import static dev.adlt.xapi.client.XApiDocuments.PostsEnvelope;
+import static dev.adlt.xapi.client.XApiDocuments.RelationshipEnvelope;
 import static dev.adlt.xapi.client.XApiDocuments.UserEnvelope;
 
 /** Timeout-bounded, OAuth-signed seam to api.x.com. */
 @Component
-@RegisterReflectionForBinding({UserEnvelope.class, FollowingEnvelope.class, PostsEnvelope.class})
+@RegisterReflectionForBinding({
+        UserEnvelope.class,
+        FollowingEnvelope.class,
+        PostsEnvelope.class,
+        RelationshipEnvelope.class
+})
 public class XApiClient {
     private static final String USER_FIELDS = String.join(",",
             "id", "name", "username", "description", "created_at", "profile_image_url",
-            "protected", "verified", "public_metrics");
+            "protected", "verified", "public_metrics", "connection_status");
     private static final String POST_FIELDS = "id,text,created_at,lang,public_metrics";
 
     private final XApiProperties properties;
@@ -89,6 +95,22 @@ public class XApiClient {
                     return uri.build(userId);
                 })
                 .retrieve().toEntity(PostsEnvelope.class));
+    }
+
+    public Result<UserEnvelope> user(String userId) {
+        requireConfigured();
+        return exchange(() -> client.get()
+                .uri(builder -> builder.path("/2/users/{id}")
+                        .queryParam("user.fields", "id,username,connection_status")
+                        .build(userId))
+                .retrieve().toEntity(UserEnvelope.class));
+    }
+
+    public Result<RelationshipEnvelope> unfollow(String sourceUserId, String targetUserId) {
+        requireConfigured();
+        return exchange(() -> client.delete()
+                .uri("/2/users/{sourceUserId}/following/{targetUserId}", sourceUserId, targetUserId)
+                .retrieve().toEntity(RelationshipEnvelope.class));
     }
 
     private void requireConfigured() {

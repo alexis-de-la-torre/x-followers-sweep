@@ -62,8 +62,8 @@ def client(publisher: RecordingPublisher) -> TestClient:
         "sourceId": sweep_id,
         "context": {
             "reviews": [
-                {"handle": "@keep", "decision": "KEEP", "reason": "Relevant"},
-                {"handle": "@reviewed", "decision": "UNFOLLOW", "reason": "Inactive"},
+                {"handle": "@keep", "xUserId": "41", "decision": "KEEP", "reason": "Relevant"},
+                {"handle": "@reviewed", "xUserId": "42", "decision": "UNFOLLOW", "reason": "Inactive"},
             ]
         },
     }
@@ -76,7 +76,7 @@ def test_accepts_exactly_one_reviewed_unfollow_as_a_product_owned_delivery(
 ) -> None:
     response = client.post(
         f"/api/v1/sweeps/{SWEEP_ID}/unfollows",
-        json={"id": UNFOLLOW_ID, "handle": "@reviewed"},
+        json={"id": UNFOLLOW_ID, "handle": "@reviewed", "xUserId": "42"},
     )
 
     assert response.status_code == 202
@@ -91,9 +91,12 @@ def test_accepts_exactly_one_reviewed_unfollow_as_a_product_owned_delivery(
     assert command["outcomeName"] == "sweep-unfollow"
     assert command["outcomeDeliveryContext"] == {
         "origin": "sweeper-agent",
-        "sweepId": SWEEP_ID,
-        "sweepDeliveryId": "delivery-1",
-        "handle": "@reviewed",
+        "params": {
+            "sweepId": SWEEP_ID,
+            "sweepDeliveryId": "delivery-1",
+            "handle": "@reviewed",
+            "xUserId": "42",
+        },
     }
     assert [step["name"] for step in command["flow"]["steps"]] == ["apply-unfollow"]
     assert command["flow"]["adjacencyList"] == [{"from": "apply-unfollow", "to": "END"}]
@@ -116,10 +119,11 @@ def test_applying_an_already_unfollowed_profile_returns_a_persisted_noop(monkeyp
     monkeypatch.setattr(service, "_connect_chrome", connect_chrome)
     monkeypatch.setattr(service, "BrowserTools", AlreadyUnfollowedBrowser)
 
-    result = asyncio.run(service.BrowserSweepExecutor().apply_unfollow("@already-gone"))
+    result = asyncio.run(service.BrowserSweepExecutor().apply_unfollow("@already-gone", "42"))
 
     assert result == {
         "handle": "@already-gone",
+        "xUserId": "42",
         "status": "ALREADY_UNFOLLOWED",
         "detail": "profile is not currently followed",
     }
@@ -129,27 +133,27 @@ def test_auto_unfollow_persists_every_profile_result_and_continues_after_failure
     executor = service.BrowserSweepExecutor()
     attempted: list[str] = []
 
-    async def apply(handle: str) -> dict:
+    async def apply(handle: str, x_user_id: str) -> dict:
         attempted.append(handle)
         if handle == "@broken":
             raise RuntimeError("X did not load the confirmation")
-        return {"handle": handle, "status": "APPLIED", "appliedAt": "now"}
+        return {"handle": handle, "xUserId": x_user_id, "status": "APPLIED", "appliedAt": "now"}
 
     monkeypatch.setattr(executor, "apply_unfollow", apply)
     reviews = [
-        {"handle": "@first", "decision": "UNFOLLOW"},
-        {"handle": "@keep", "decision": "KEEP"},
-        {"handle": "@broken", "decision": "UNFOLLOW"},
-        {"handle": "@last", "decision": "UNFOLLOW"},
+        {"handle": "@first", "xUserId": "1", "decision": "UNFOLLOW"},
+        {"handle": "@keep", "xUserId": "2", "decision": "KEEP"},
+        {"handle": "@broken", "xUserId": "3", "decision": "UNFOLLOW"},
+        {"handle": "@last", "xUserId": "4", "decision": "UNFOLLOW"},
     ]
 
     results = asyncio.run(executor.apply_unfollows(reviews))
 
     assert attempted == ["@first", "@broken", "@last"]
     assert results == [
-        {"handle": "@first", "status": "APPLIED", "appliedAt": "now"},
-        {"handle": "@broken", "status": "FAILED", "detail": "X did not load the confirmation"},
-        {"handle": "@last", "status": "APPLIED", "appliedAt": "now"},
+        {"handle": "@first", "xUserId": "1", "status": "APPLIED", "appliedAt": "now"},
+        {"handle": "@broken", "xUserId": "3", "status": "FAILED", "detail": "X did not load the confirmation"},
+        {"handle": "@last", "xUserId": "4", "status": "APPLIED", "appliedAt": "now"},
     ]
 
 
@@ -161,11 +165,25 @@ def test_rejects_a_handle_without_a_persisted_unfollow_decision(
 ) -> None:
     response = client.post(
         f"/api/v1/sweeps/{SWEEP_ID}/unfollows",
-        json={"id": UNFOLLOW_ID, "handle": handle},
+        json={"id": UNFOLLOW_ID, "handle": handle, "xUserId": "42"},
     )
 
     assert response.status_code == 409
     assert response.json() == {"detail": "handle is not a reviewed UNFOLLOW decision"}
+    assert publisher.messages == []
+
+
+def test_rejects_a_stable_id_that_does_not_match_the_persisted_review(
+    client: TestClient,
+    publisher: RecordingPublisher,
+) -> None:
+    response = client.post(
+        f"/api/v1/sweeps/{SWEEP_ID}/unfollows",
+        json={"id": UNFOLLOW_ID, "handle": "@reviewed", "xUserId": "43"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "target is not the reviewed UNFOLLOW decision"}
     assert publisher.messages == []
 
 

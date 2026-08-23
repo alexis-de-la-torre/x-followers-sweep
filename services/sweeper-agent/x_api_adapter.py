@@ -84,9 +84,23 @@ class XApiAdapterClient:
     async def posts(self, user_id: str, limit: int = 3) -> dict[str, Any]:
         return await self._get(f"/api/v1/users/{user_id}/posts", params={"limit": limit})
 
+    async def relationship(self, user_id: str) -> dict[str, Any]:
+        return await self._get(f"/api/v1/account/following/{user_id}")
+
+    async def unfollow(self, user_id: str) -> dict[str, Any]:
+        return await self._request("DELETE", f"/api/v1/account/following/{user_id}")
+
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return await self._request("GET", path, params)
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         try:
-            response = await self._client.get(path, params=params)
+            response = await self._client.request(method, path, params=params)
         except httpx.HTTPError as exc:
             raise XApiAdapterError(f"x-api-adapter unavailable: {exc.__class__.__name__}") from exc
         if not response.is_success:

@@ -180,6 +180,7 @@ class SweepAccepted(BaseModel):
 class UnfollowRequest(BaseModel):
     id: uuid.UUID
     handle: str = Field(pattern=r"^@[A-Za-z0-9_]{1,15}$")
+    x_user_id: str = Field(alias="xUserId", pattern=r"^[0-9]{1,19}$")
 
 
 def _parse_json_array(text: str) -> list:
@@ -409,6 +410,8 @@ async def accept_unfollow(sweep_id: uuid.UUID, req: UnfollowRequest):
     )
     if selected is None:
         raise HTTPException(409, "handle is not a reviewed UNFOLLOW decision")
+    if str(selected.get("xUserId", "")) != req.x_user_id:
+        raise HTTPException(409, "target is not the reviewed UNFOLLOW decision")
 
     unfollow_id = str(req.id)
     try:
@@ -419,6 +422,7 @@ async def accept_unfollow(sweep_id: uuid.UUID, req: UnfollowRequest):
                 str(sweep_id),
                 str(sweep["deliveryId"]),
                 str(selected["handle"]),
+                req.x_user_id,
             ),
         )
     except Exception as exc:
@@ -494,7 +498,7 @@ class BrowserSweepExecutor:
         response = await review_handles(ReviewRequest(handles=handles, mode=mode))
         return [result.model_dump(exclude_none=True) for result in response.results]
 
-    async def apply_unfollow(self, handle: str) -> dict:
+    async def apply_unfollow(self, handle: str, x_user_id: str) -> dict:
         ws, psid = await _connect_chrome()
         try:
             browser = BrowserTools(ws, psid)
@@ -505,12 +509,14 @@ class BrowserSweepExecutor:
                 if str(exc) == "profile is not currently followed":
                     return {
                         "handle": handle,
+                        "xUserId": x_user_id,
                         "status": "ALREADY_UNFOLLOWED",
                         "detail": str(exc),
                     }
                 raise
             return {
                 "handle": handle,
+                "xUserId": x_user_id,
                 "status": "APPLIED",
                 "appliedAt": datetime.now(timezone.utc).isoformat(),
             }
@@ -523,11 +529,13 @@ class BrowserSweepExecutor:
             if review.get("decision") != "UNFOLLOW":
                 continue
             handle = str(review["handle"])
+            x_user_id = str(review.get("xUserId") or "")
             try:
-                results.append(await self.apply_unfollow(handle))
+                results.append(await self.apply_unfollow(handle, x_user_id))
             except Exception as exc:
                 results.append({
                     "handle": handle,
+                    "xUserId": x_user_id,
                     "status": "FAILED",
                     "detail": str(exc) or exc.__class__.__name__,
                 })
@@ -566,8 +574,36 @@ class ApiSweepExecutor:
             decision["xUserId"] = profile["xUserId"]
         return decisions
 
-    async def apply_unfollow(self, handle: str) -> dict:
-        return await self.write_executor.apply_unfollow(handle)
+    async def apply_unfollow(self, handle: str, x_user_id: str) -> dict:
+        before = await self.adapter.relationship(x_user_id)
+        target = before.get("target") if isinstance(before.get("target"), dict) else {}
+        if str(target.get("id") or "") != x_user_id:
+            raise ValueError("X_RELATIONSHIP_TARGET_MISMATCH")
+        if before.get("following") is not True:
+            raise ValueError("X_TARGET_NOT_FOLLOWED")
+
+        mutation = await self.adapter.unfollow(x_user_id)
+        if str(mutation.get("targetId") or "") != x_user_id:
+            raise ValueError("X_UNFOLLOW_TARGET_MISMATCH")
+        if mutation.get("following") is not False:
+            raise ValueError("X_UNFOLLOW_NOT_APPLIED")
+
+        after = await self.adapter.relationship(x_user_id)
+        if str((after.get("target") or {}).get("id") or "") != x_user_id:
+            raise ValueError("X_RELATIONSHIP_TARGET_MISMATCH")
+        if after.get("following") is not False:
+            raise ValueError("X_UNFOLLOW_NOT_REFLECTED")
+
+        return {
+            "handle": handle,
+            "xUserId": x_user_id,
+            "status": "APPLIED",
+            "transport": "X_API",
+            "appliedAt": datetime.now(timezone.utc).isoformat(),
+            "before": before,
+            "mutation": mutation,
+            "after": after,
+        }
 
     async def apply_unfollows(self, reviews: list[dict]) -> list[dict]:
         return await self.write_executor.apply_unfollows(reviews)
@@ -581,6 +617,7 @@ async def health():
         account = getattr(app.state, "x_account", None)
         status["xApi"] = {
             "configured": True,
+            "writeConfigured": True,
             "account": f"@{account.get('username')}" if isinstance(account, dict) and account.get("username") else None,
             "error": getattr(app.state, "x_api_error", None),
         }

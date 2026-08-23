@@ -53,6 +53,39 @@ public class XAccountService {
         return new Posts(userId, posts, nextCursor, posts.size(), 1, result.rateLimit());
     }
 
+    public Relationship relationship(String targetUserId) {
+        XApiClient.Result<XApiDocuments.UserEnvelope> identityResult = client.me();
+        XApiDocuments.XUser source = identityResult.body() == null ? null : identityResult.body().data();
+        if (source == null) throw new IllegalStateException("X API returned no authenticated user");
+
+        XApiClient.Result<XApiDocuments.UserEnvelope> targetResult = client.user(targetUserId);
+        XApiDocuments.XUser target = targetResult.body() == null ? null : targetResult.body().data();
+        if (target == null) throw new IllegalStateException("X API returned no relationship target");
+        List<String> connectionStatus = target.connectionStatus() == null
+                ? Collections.emptyList() : List.copyOf(target.connectionStatus());
+        return new Relationship(
+                account(source),
+                new RelationshipTarget(target.id(), target.username()),
+                connectionStatus.contains("following"),
+                connectionStatus,
+                1,
+                2,
+                targetResult.rateLimit());
+    }
+
+    public Unfollow unfollow(String targetUserId) {
+        XApiClient.Result<XApiDocuments.UserEnvelope> identityResult = client.me();
+        XApiDocuments.XUser source = identityResult.body() == null ? null : identityResult.body().data();
+        if (source == null) throw new IllegalStateException("X API returned no authenticated user");
+
+        XApiClient.Result<XApiDocuments.RelationshipEnvelope> result = client.unfollow(source.id(), targetUserId);
+        XApiDocuments.RelationshipData data = result.body() == null ? null : result.body().data();
+        if (data == null || data.following() == null) {
+            throw new IllegalStateException("X API returned no unfollow relationship state");
+        }
+        return new Unfollow(account(source), targetUserId, data.following(), 2, result.rateLimit());
+    }
+
     private static Map<String, XApiDocuments.XPost> postsById(XApiDocuments.Includes includes) {
         if (includes == null || includes.posts() == null) return Collections.emptyMap();
         Map<String, XApiDocuments.XPost> posts = new LinkedHashMap<>();
@@ -93,6 +126,26 @@ public class XAccountService {
             List<FollowingAccount> accounts,
             String nextCursor,
             int returnedResources,
+            int upstreamRequests,
+            XApiClient.RateLimit rateLimit
+    ) {}
+
+    public record RelationshipTarget(String id, String username) {}
+
+    public record Relationship(
+            Account source,
+            RelationshipTarget target,
+            boolean following,
+            List<String> connectionStatus,
+            int returnedResources,
+            int upstreamRequests,
+            XApiClient.RateLimit rateLimit
+    ) {}
+
+    public record Unfollow(
+            Account source,
+            String targetId,
+            boolean following,
             int upstreamRequests,
             XApiClient.RateLimit rateLimit
     ) {}

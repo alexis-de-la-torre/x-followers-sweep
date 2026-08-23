@@ -96,6 +96,84 @@ def test_api_executor_reviews_persisted_evidence_without_a_browser(monkeypatch) 
     ]
 
 
+def test_api_executor_applies_one_stable_id_with_fresh_before_and_after_reads() -> None:
+    class RelationshipAdapter:
+        def __init__(self) -> None:
+            self.relationships = [
+                {
+                    "source": {"id": "1478416609", "username": "dlt_alx"},
+                    "target": {"id": "42", "username": "reviewed"},
+                    "following": True,
+                    "connectionStatus": ["following"],
+                },
+                {
+                    "source": {"id": "1478416609", "username": "dlt_alx"},
+                    "target": {"id": "42", "username": "reviewed"},
+                    "following": False,
+                    "connectionStatus": [],
+                },
+            ]
+            self.unfollowed: list[str] = []
+
+        async def relationship(self, x_user_id: str) -> dict:
+            assert x_user_id == "42"
+            return self.relationships.pop(0)
+
+        async def unfollow(self, x_user_id: str) -> dict:
+            self.unfollowed.append(x_user_id)
+            return {
+                "source": {"id": "1478416609", "username": "dlt_alx"},
+                "targetId": x_user_id,
+                "following": False,
+                "upstreamRequests": 2,
+            }
+
+    class BrowserMustNotRun:
+        async def apply_unfollow(self, _handle: str, _x_user_id: str) -> dict:
+            raise AssertionError("Chrome write path must not run")
+
+    adapter = RelationshipAdapter()
+    executor = service.ApiSweepExecutor(adapter=adapter, write_executor=BrowserMustNotRun())
+
+    result = run(executor.apply_unfollow("@reviewed", "42"))
+
+    assert adapter.unfollowed == ["42"]
+    assert result["handle"] == "@reviewed"
+    assert result["xUserId"] == "42"
+    assert result["status"] == "APPLIED"
+    assert result["transport"] == "X_API"
+    assert result["before"]["following"] is True
+    assert result["after"]["following"] is False
+    assert result["mutation"]["targetId"] == "42"
+
+
+def test_adapter_client_uses_stable_id_for_relationship_lookup_and_delete() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "DELETE":
+            return httpx.Response(200, json={"targetId": "42", "following": False})
+        return httpx.Response(200, json={
+            "target": {"id": "42", "username": "reviewed"},
+            "following": True,
+        })
+
+    http = httpx.AsyncClient(base_url="http://x-api-adapter", transport=httpx.MockTransport(handler))
+    client = XApiAdapterClient("http://x-api-adapter", http)
+
+    before = run(client.relationship("42"))
+    applied = run(client.unfollow("42"))
+
+    assert before["following"] is True
+    assert applied == {"targetId": "42", "following": False}
+    assert [(request.method, request.url.path) for request in requests] == [
+        ("GET", "/api/v1/account/following/42"),
+        ("DELETE", "/api/v1/account/following/42"),
+    ]
+    run(http.aclose())
+
+
 def test_adapter_error_surfaces_category_without_raw_secret_like_body() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(402, json={"error": "X_CREDITS_REQUIRED", "detail": "private upstream text"})
