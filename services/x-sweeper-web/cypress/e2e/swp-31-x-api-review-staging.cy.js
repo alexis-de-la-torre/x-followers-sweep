@@ -117,7 +117,7 @@ describeStaging("SWP-31 X API three-account review", () => {
       sweepId,
       (delivery) => {
         const context = contextOf(delivery);
-        return delivery.status === "COMPLETED" &&
+        return delivery.status === "ALL_TASKS_COMPLETED" &&
           Array.isArray(context.reviews) && context.reviews.length === 3 &&
           (delivery.steps || []).length === 2 &&
           delivery.steps.every((step) => step.result === "SUCCESS");
