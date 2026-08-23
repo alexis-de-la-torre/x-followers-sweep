@@ -45,9 +45,14 @@ describeLocal("SWP-6 complete bounded dry run", () => {
 
     cy.visit("/");
     cy.contains("Sweep Runs").should("be.visible");
+    cy.wait("@deliveries", { requestTimeout: 10000, responseTimeout: 30000 })
+      .its("response.statusCode")
+      .should("eq", 200);
+    cy.contains("Agent online", { timeout: 30000 }).should("be.visible");
+    cy.get('[data-testid="new-sweep"]').should("be.enabled");
     cy.screenshot("01-sweep-ready", { capture: "viewport" });
 
-    cy.get('[data-testid="new-sweep"]').should("be.enabled").click();
+    cy.get('[data-testid="new-sweep"]').click();
     cy.wait("@startSweep", { requestTimeout: 10000, responseTimeout: 30000 })
       .then(({ request, response }) => {
         expect(response?.statusCode, "sweep accepted").to.eq(202);
