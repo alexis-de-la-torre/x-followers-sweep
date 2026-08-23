@@ -4,6 +4,7 @@
 
 describe("X Sweeper Web", () => {
   beforeEach(() => {
+    cy.clearLocalStorage();
     cy.visit("/");
   });
 
@@ -23,21 +24,41 @@ describe("X Sweeper Web", () => {
     cy.contains("Agent Status").should("be.visible");
   });
 
+  it("keeps a three-option bottom navigation across screens", () => {
+    cy.get('[data-testid="floating-bottom-nav"]').within(() => {
+      cy.contains("Runs").should("be.visible");
+      cy.contains("Status").should("be.visible");
+      cy.contains("Config").should("be.visible");
+      cy.get('[aria-label="Runs"]').should("have.attr", "aria-current", "page");
+    });
+
+    cy.get('[aria-label="Config"]').click();
+    cy.url().should("include", "/config");
+    cy.contains("Sweep Configuration").should("be.visible");
+    cy.get('[aria-label="Config"]').should("have.attr", "aria-current", "page");
+  });
+
   it("shows the New Run button", () => {
     cy.contains("New Run").should("be.visible");
   });
 
-  it("offers auto-unfollow as an explicit off-by-default mode", () => {
-    cy.get('[data-testid="auto-unfollow"]').should("not.be.checked").check();
+  it("configures auto-unfollow off by default and persists the choice", () => {
+    cy.visit("/config");
+    cy.get('[data-testid="settings-page"]').should("have.attr", "data-settings-ready", "true");
+    cy.get('[data-testid="auto-unfollow"]').should("not.be.checked").check({ force: true });
     cy.get('[data-testid="auto-unfollow"]').should("be.checked");
-    cy.contains("Automatically apply every UNFOLLOW recommendation").should("be.visible");
+    cy.reload();
+    cy.get('[data-testid="auto-unfollow"]').should("be.checked");
   });
 
-  it("lets the user increase a sweep beyond three accounts", () => {
+  it("configures and persists sweeps larger than three accounts", () => {
+    cy.visit("/config");
+    cy.get('[data-testid="settings-page"]').should("have.attr", "data-settings-ready", "true");
     cy.get('[data-testid="sweep-count"]').should("have.value", "3 accounts").click();
     cy.get('[role="option"]').contains("10 accounts").click();
     cy.get('[data-testid="sweep-count"]').should("have.value", "10 accounts");
-    cy.contains("Up to 30 accounts per sweep").should("be.visible");
+    cy.reload();
+    cy.get('[data-testid="sweep-count"]').should("have.value", "10 accounts");
   });
 
   it("shows runs list when deliveries exist", () => {

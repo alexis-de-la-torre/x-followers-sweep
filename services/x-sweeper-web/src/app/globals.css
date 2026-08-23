@@ -2,4 +2,8 @@
 
 @keyframes flow-spin { to { transform: rotate(1turn); } }
 .flow-spin { animation: flow-spin 1s linear infinite; transform-origin: center; }
-@media (prefers-reduced-motion: reduce) { .flow-spin { animation: none; } }
+.bottom-nav-indicator { transition: transform 300ms ease; }
+@media (prefers-reduced-motion: reduce) {
+  .flow-spin { animation: none; }
+  .bottom-nav-indicator { transition: none; }
+}

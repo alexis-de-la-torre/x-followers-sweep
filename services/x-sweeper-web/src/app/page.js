@@ -2,10 +2,11 @@
 
 // Sweep Runs — the outcome-engine-backed run list (data layer in src/lib/engine.js).
 import { useEffect, useRef, useState } from "react";
-import { Alert, Box, Button, Container, Divider, Group, Modal, Stack, Text, UnstyledButton, Card, Skeleton, Badge, Switch, Select } from "@mantine/core";
+import { Alert, Box, Button, Container, Divider, Group, Modal, Stack, Text, UnstyledButton, Card, Skeleton, Badge } from "@mantine/core";
 import { IconAlertTriangle, IconBrandTwitterFilled, IconCheck, IconChecks, IconCircleDashed, IconClock, IconLoader2, IconPlayerPlay, IconX } from "@tabler/icons-react";
 import { fetchRuns, fetchAgentStatus, triggerRun, triggerUnfollow, overallStatus, furthestStep } from "@/lib/engine";
 import { fmtMs, fmtDateTime, fmtTime, fmtStamp, relativeTime } from "@/lib/format";
+import { useSweepSettings } from "@/components/SweepSettingsProvider";
 
 // ─── Status glyphs ───
 
@@ -229,8 +230,7 @@ export default function RunsPage() {
   const [confirmUnfollow, setConfirmUnfollow] = useState(null);
   const [applyingUnfollow, setApplyingUnfollow] = useState(false);
   const [unfollowError, setUnfollowError] = useState(null);
-  const [autoUnfollow, setAutoUnfollow] = useState(false);
-  const [sweepCount, setSweepCount] = useState(3);
+  const { autoUnfollow, sweepCount, ready: settingsReady } = useSweepSettings();
 
   useEffect(() => {
     let active = true;
@@ -293,8 +293,8 @@ export default function RunsPage() {
   };
 
   return (
-    <Box bg="gray.2" mih="calc(100dvh - var(--app-shell-header-height, 46px) - var(--app-shell-footer-height, 56px))">
-      <Container size="sm" bg="white" mih="calc(100dvh - var(--app-shell-header-height, 46px) - var(--app-shell-footer-height, 56px))" pb="xl">
+    <Box bg="gray.2" mih="calc(100dvh - var(--app-shell-header-height, 46px) - var(--app-shell-footer-height, 74px))">
+      <Container size="sm" bg="white" mih="calc(100dvh - var(--app-shell-header-height, 46px) - var(--app-shell-footer-height, 74px))" pb="xl">
         <Box pos="sticky" bg="white" mx="calc(-1 * var(--mantine-spacing-md))" px="md"
              style={{ top: "var(--app-shell-header-height, 46px)", zIndex: 5 }}>
           <Group justify="space-between" py="xs">
@@ -311,38 +311,12 @@ export default function RunsPage() {
                 </Text>
               )}
               <Button size="xs" variant="light" leftSection={<IconPlayerPlay size={14} />}
-                      loading={triggering} onClick={handleTrigger} data-testid="new-sweep">
+                      loading={triggering} disabled={!settingsReady} onClick={handleTrigger} data-testid="new-sweep">
                 New Run
               </Button>
             </Group>
           </Group>
           <AgentStatusBar />
-          <Switch
-            size="xs"
-            mb="xs"
-            color="orange"
-            checked={autoUnfollow}
-            onChange={(event) => setAutoUnfollow(event.currentTarget.checked)}
-            label="Automatically apply every UNFOLLOW recommendation"
-            data-testid="auto-unfollow"
-          />
-          <Select
-            size="xs"
-            mb="xs"
-            w={180}
-            label="Accounts per sweep"
-            description="Up to 30 accounts per sweep"
-            data={[
-              { value: "3", label: "3 accounts" },
-              { value: "10", label: "10 accounts" },
-              { value: "20", label: "20 accounts" },
-              { value: "30", label: "30 accounts" },
-            ]}
-            value={String(sweepCount)}
-            onChange={(value) => value && setSweepCount(Number(value))}
-            allowDeselect={false}
-            data-testid="sweep-count"
-          />
           <Divider mx="calc(-1 * var(--mantine-spacing-md))" />
         </Box>
 
@@ -415,7 +389,7 @@ export default function RunsPage() {
             <Text size="sm" c="dimmed">No sweep runs yet.</Text>
             <Text size="xs" c="dimmed">Trigger a new run to get started.</Text>
             <Button size="xs" variant="light" mt="sm" leftSection={<IconPlayerPlay size={14} />}
-                    onClick={handleTrigger} data-testid="new-sweep">
+                    disabled={!settingsReady} onClick={handleTrigger} data-testid="new-sweep">
               New Run
             </Button>
           </Stack>
