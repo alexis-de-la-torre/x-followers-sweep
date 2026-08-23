@@ -1,11 +1,18 @@
+{{- if ne (int .Values.replicaCount) 1 }}
+{{- fail "chrome-vnc owns one persisted browser profile and replicaCount must be 1" }}
+{{- end }}
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ include "chrome-vnc.fullname" . }}
   labels:
     {{- include "chrome-vnc.labels" . | nindent 4 }}
 spec:
+  serviceName: {{ include "chrome-vnc.fullname" . }}-headless
   replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
   selector:
     matchLabels:
       {{- include "chrome-vnc.selectorLabels" . | nindent 6 }}
@@ -15,10 +22,22 @@ spec:
         {{- include "chrome-vnc.selectorLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "chrome-vnc.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: CHROME_STARTUP_TIMEOUT_SECONDS
+              value: {{ .Values.chrome.startupTimeoutSeconds | quote }}
+            - name: CHROME_SHUTDOWN_TIMEOUT_SECONDS
+              value: {{ .Values.chrome.shutdownTimeoutSeconds | quote }}
+            - name: STALE_LOCK_QUIET_SECONDS
+              value: {{ .Values.chrome.staleLockQuietSeconds | quote }}
+            - name: STALE_LOCK_WAIT_TIMEOUT_SECONDS
+              value: {{ .Values.chrome.staleLockWaitTimeoutSeconds | quote }}
+            - name: PROFILE_OWNER_CDP_URL
+              value: "http://{{ include "chrome-vnc.fullname" . }}:9222/json/version"
           ports:
             - name: cdp
               containerPort: 9222
@@ -29,6 +48,8 @@ spec:
           volumeMounts:
             - name: chrome-profile
               mountPath: /chrome-profile
+          startupProbe:
+            {{- toYaml .Values.startupProbe | nindent 12 }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:

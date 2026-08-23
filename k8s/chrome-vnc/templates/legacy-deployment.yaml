@@ -1,0 +1,32 @@
+# Cloud Deploy applies rendered manifests without pruning resources removed from
+# the chart. Keep the former Deployment declared at zero replicas so the first
+# StatefulSet rollout scales the legacy profile owner down deterministically.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "chrome-vnc.fullname" . }}
+  labels:
+    {{- include "chrome-vnc.labels" . | nindent 4 }}
+  annotations:
+    x-sweeper.adlt.dev/state: dormant-migration-controller
+spec:
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "chrome-vnc.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "chrome-vnc.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: legacy-disabled
+    spec:
+      serviceAccountName: {{ include "chrome-vnc.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: legacy-disabled
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/false
