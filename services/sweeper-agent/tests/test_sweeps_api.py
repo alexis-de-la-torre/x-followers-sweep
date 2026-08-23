@@ -28,6 +28,7 @@ import service  # noqa: E402
 
 
 SWEEP_ID = "0198d8f7-96cd-7a42-97a1-b359af601895"
+UNFOLLOW_ID = "0198d8f7-96cd-7a42-97a1-b359af601896"
 
 
 class RecordingPublisher:
@@ -50,7 +51,62 @@ def client(publisher: RecordingPublisher) -> TestClient:
     # route. It is the Python equivalent of Sofom replacing StreamBridge in a
     # WebMvc slice while retaining the real HTTP/Jackson contract.
     service.app.state.sweep_publisher = publisher
+    service.app.state.sweep_loader = lambda sweep_id: {
+        "deliveryId": "delivery-1",
+        "sourceId": sweep_id,
+        "context": {
+            "reviews": [
+                {"handle": "@keep", "decision": "KEEP", "reason": "Relevant"},
+                {"handle": "@reviewed", "decision": "UNFOLLOW", "reason": "Inactive"},
+            ]
+        },
+    }
     return TestClient(service.app)
+
+
+def test_accepts_exactly_one_reviewed_unfollow_as_a_product_owned_delivery(
+    client: TestClient,
+    publisher: RecordingPublisher,
+) -> None:
+    response = client.post(
+        f"/api/v1/sweeps/{SWEEP_ID}/unfollows",
+        json={"id": UNFOLLOW_ID, "handle": "@reviewed"},
+    )
+
+    assert response.status_code == 202
+    assert response.headers["location"] == f"/api/v1/unfollows/{UNFOLLOW_ID}"
+    assert response.json() == {"id": UNFOLLOW_ID, "status": "accepted"}
+
+    topic, command, attributes = publisher.messages[-1]
+    assert topic == "OUTCOME.DELIVERY.COMMANDS.DELIVER"
+    assert attributes is None
+    assert command["sourceType"] == "x-sweep-unfollow"
+    assert command["sourceId"] == UNFOLLOW_ID
+    assert command["outcomeName"] == "sweep-unfollow"
+    assert command["outcomeDeliveryContext"] == {
+        "origin": "sweeper-agent",
+        "sweepId": SWEEP_ID,
+        "sweepDeliveryId": "delivery-1",
+        "handle": "@reviewed",
+    }
+    assert [step["name"] for step in command["flow"]["steps"]] == ["apply-unfollow"]
+    assert command["flow"]["adjacencyList"] == [{"from": "apply-unfollow", "to": "END"}]
+
+
+@pytest.mark.parametrize("handle", ["@keep", "@unknown"])
+def test_rejects_a_handle_without_a_persisted_unfollow_decision(
+    client: TestClient,
+    publisher: RecordingPublisher,
+    handle: str,
+) -> None:
+    response = client.post(
+        f"/api/v1/sweeps/{SWEEP_ID}/unfollows",
+        json={"id": UNFOLLOW_ID, "handle": handle},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "handle is not a reviewed UNFOLLOW decision"}
+    assert publisher.messages == []
 
 
 def test_accepts_a_dry_run_and_publishes_the_pinned_two_step_flow(
@@ -106,6 +162,33 @@ def test_accepts_a_dry_run_and_publishes_the_pinned_two_step_flow(
             {"from": "review-handles", "to": "END"},
         ],
     }
+
+
+def test_accepts_auto_unfollow_as_a_pinned_three_step_flow(
+    client: TestClient,
+    publisher: RecordingPublisher,
+) -> None:
+    response = client.post(
+        "/api/v1/sweeps",
+        json={"id": SWEEP_ID, "mode": "auto-unfollow", "count": 3},
+    )
+
+    assert response.status_code == 202
+    command = publisher.messages[-1][1]
+    assert command["outcomeDeliveryContext"]["params"] == {
+        "mode": "auto-unfollow",
+        "count": 3,
+    }
+    assert [step["name"] for step in command["flow"]["steps"]] == [
+        "generate-candidates",
+        "review-handles",
+        "apply-unfollows",
+    ]
+    assert command["flow"]["adjacencyList"] == [
+        {"from": "generate-candidates", "to": "review-handles"},
+        {"from": "review-handles", "to": "apply-unfollows"},
+        {"from": "apply-unfollows", "to": "END"},
+    ]
 
 
 @pytest.mark.parametrize(

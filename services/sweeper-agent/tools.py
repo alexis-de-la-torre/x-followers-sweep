@@ -213,33 +213,59 @@ class BrowserTools:
 
     async def click_unfollow(self) -> str:
         """Click Following → Unfollow. Works on X profiles."""
-        # First click the "Following @handle" button
-        find = await self._evaluate("""
+        await self.unfollow_current_profile()
+        return "Unfollow action: unfollowed"
+
+    async def unfollow_current_profile(self) -> bool:
+        """Apply one unfollow and require the visible relationship to change."""
+        relationship = await self._evaluate("""
             (() => {
                 const btn = [...document.querySelectorAll('button')]
-                    .find(b => b.getAttribute('aria-label')?.startsWith('Following @'));
-                if(btn) { btn.click(); return 'clicked'; }
-                // Try text match
-                const btn2 = [...document.querySelectorAll('button')]
-                    .find(b => b.textContent.trim() === 'Following' && !b.querySelector('a'));
-                if(btn2) { btn2.click(); return 'clicked'; }
-                return 'not found';
+                    .find(b => b.getAttribute('aria-label')?.startsWith('Following @') ||
+                               (b.textContent.trim() === 'Following' && !b.querySelector('a')));
+                return btn ? 'following' : 'not-following';
             })()
         """)
-        if find != "clicked":
-            return f"Could not find Following button: {find}"
-        await asyncio.sleep(2)
-        # Click the "Unfollow" confirmation
+        if relationship != "following":
+            raise RuntimeError("profile is not currently followed")
+
+        opened = await self._evaluate("""
+            (() => {
+                const btn = [...document.querySelectorAll('button')]
+                    .find(b => b.getAttribute('aria-label')?.startsWith('Following @') ||
+                               (b.textContent.trim() === 'Following' && !b.querySelector('a')));
+                if (!btn) return 'not-found';
+                btn.click();
+                return 'clicked';
+            })()
+        """)
+        if opened != "clicked":
+            raise RuntimeError("could not open the unfollow confirmation")
+        await asyncio.sleep(1)
         unfollow = await self._evaluate("""
             (() => {
                 const btn = [...document.querySelectorAll('button')]
                     .find(b => b.textContent.trim() === 'Unfollow');
                 if(btn) { btn.click(); return 'unfollowed'; }
-                return 'not found';
+                return 'not-found';
             })()
         """)
-        await asyncio.sleep(1)
-        return f"Unfollow action: {unfollow}"
+        if unfollow != "unfollowed":
+            raise RuntimeError("could not confirm the unfollow")
+
+        for _ in range(20):
+            await asyncio.sleep(0.5)
+            relationship = await self._evaluate("""
+                (() => {
+                    const btn = [...document.querySelectorAll('button')]
+                        .find(b => b.getAttribute('aria-label')?.startsWith('Following @') ||
+                                   (b.textContent.trim() === 'Following' && !b.querySelector('a')));
+                    return btn ? 'following' : 'not-following';
+                })()
+            """)
+            if relationship == "not-following":
+                return True
+        raise RuntimeError("unfollow was not reflected by X")
 
     async def scroll(self, pixels: int = 8000) -> str:
         await self._evaluate(f"window.scrollBy(0, {pixels})")

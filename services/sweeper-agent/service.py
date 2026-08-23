@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """X cleanup fulfiller backed by authenticated Chrome and an LLM reviewer."""
 
-import asyncio, json, os, re, time, uuid
+import asyncio, inspect, json, os, re, time, uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlsplit, urlunsplit
@@ -18,10 +19,12 @@ from platform_adapter import (
     DELIVER_TOPIC,
     GooglePubSubPublisher,
     OutcomeEngineContextLoader,
+    OutcomeEngineSweepLoader,
     PubSubRuntime,
     PubSubSettings,
     SweepTaskHandler,
     sweep_delivery_command,
+    unfollow_delivery_command,
 )
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -144,7 +147,7 @@ No markdown, no code fences, no explanations after the JSON. Just the array."""
 
 class ReviewRequest(BaseModel):
     handles: list[str]
-    mode: str = Field(default="dry-run", pattern="^dry-run$")
+    mode: str = Field(default="dry-run", pattern="^(dry-run|auto-unfollow)$")
 
 class ReviewResult(BaseModel):
     handle: str
@@ -165,12 +168,17 @@ class CandidateResponse(BaseModel):
 
 class SweepRequest(BaseModel):
     id: uuid.UUID
-    mode: str = Field(default="dry-run", pattern="^dry-run$")
+    mode: str = Field(default="dry-run", pattern="^(dry-run|auto-unfollow)$")
     count: int = Field(default=3, ge=1, le=30)
 
 class SweepAccepted(BaseModel):
     id: uuid.UUID
     status: str = "accepted"
+
+
+class UnfollowRequest(BaseModel):
+    id: uuid.UUID
+    handle: str = Field(pattern=r"^@[A-Za-z0-9_]{1,15}$")
 
 
 def _parse_json_array(text: str) -> list:
@@ -266,6 +274,7 @@ async def lifespan(app: FastAPI):
             platform_runtime = PubSubRuntime(settings, handler, publisher)
             platform_runtime.start(asyncio.get_running_loop())
             app.state.sweep_publisher = publisher
+            app.state.sweep_loader = OutcomeEngineSweepLoader(settings.outcome_engine_url)
             app.state.platform_runtime = platform_runtime
             print(f"Outcome Engine fulfiller: listening on {settings.subscription_id}", flush=True)
         except Exception as e:
@@ -317,6 +326,59 @@ async def accept_sweep(req: SweepRequest):
         status_code=202,
         headers={"Location": f"/api/v1/sweeps/{sweep_id}"},
         content={"id": sweep_id, "status": "accepted"},
+    )
+
+
+@app.post(
+    "/api/v1/sweeps/{sweep_id}/unfollows",
+    response_model=SweepAccepted,
+    status_code=202,
+)
+async def accept_unfollow(sweep_id: uuid.UUID, req: UnfollowRequest):
+    """Accept one explicit action only when the persisted review selected it."""
+    publisher = getattr(app.state, "sweep_publisher", None)
+    loader = getattr(app.state, "sweep_loader", None)
+    if publisher is None or loader is None:
+        raise HTTPException(503, "sweep platform is not configured")
+    try:
+        sweep = loader(str(sweep_id))
+        if inspect.isawaitable(sweep):
+            sweep = await sweep
+    except Exception as exc:
+        raise HTTPException(503, "could not load reviewed sweep") from exc
+
+    context = sweep.get("context", {}) if isinstance(sweep, dict) else {}
+    reviews = context.get("reviews", []) if isinstance(context, dict) else []
+    selected = next(
+        (
+            review
+            for review in reviews
+            if isinstance(review, dict)
+            and str(review.get("handle", "")).casefold() == req.handle.casefold()
+            and review.get("decision") == "UNFOLLOW"
+        ),
+        None,
+    )
+    if selected is None:
+        raise HTTPException(409, "handle is not a reviewed UNFOLLOW decision")
+
+    unfollow_id = str(req.id)
+    try:
+        await publisher.publish(
+            DELIVER_TOPIC,
+            unfollow_delivery_command(
+                unfollow_id,
+                str(sweep_id),
+                str(sweep["deliveryId"]),
+                str(selected["handle"]),
+            ),
+        )
+    except Exception as exc:
+        raise HTTPException(503, "could not accept unfollow") from exc
+    return JSONResponse(
+        status_code=202,
+        headers={"Location": f"/api/v1/unfollows/{unfollow_id}"},
+        content={"id": unfollow_id, "status": "accepted"},
     )
 
 
@@ -378,6 +440,27 @@ class BrowserSweepExecutor:
     async def review_handles(self, handles: list[str], mode: str) -> list[dict]:
         response = await review_handles(ReviewRequest(handles=handles, mode=mode))
         return [result.model_dump(exclude_none=True) for result in response.results]
+
+    async def apply_unfollow(self, handle: str) -> dict:
+        ws, psid = await _connect_chrome()
+        try:
+            browser = BrowserTools(ws, psid)
+            await browser.navigate(f"https://x.com/{handle.lstrip('@')}")
+            await browser.unfollow_current_profile()
+            return {
+                "handle": handle,
+                "status": "APPLIED",
+                "appliedAt": datetime.now(timezone.utc).isoformat(),
+            }
+        finally:
+            await ws.close()
+
+    async def apply_unfollows(self, reviews: list[dict]) -> list[dict]:
+        results = []
+        for review in reviews:
+            if review.get("decision") == "UNFOLLOW":
+                results.append(await self.apply_unfollow(str(review["handle"])))
+        return results
 
 
 @app.get("/health")

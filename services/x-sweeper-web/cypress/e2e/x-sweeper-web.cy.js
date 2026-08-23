@@ -27,6 +27,12 @@ describe("X Sweeper Web", () => {
     cy.contains("New Run").should("be.visible");
   });
 
+  it("offers auto-unfollow as an explicit off-by-default mode", () => {
+    cy.get('[data-testid="auto-unfollow"]').should("not.be.checked").check();
+    cy.get('[data-testid="auto-unfollow"]').should("be.checked");
+    cy.contains("Automatically apply every UNFOLLOW recommendation").should("be.visible");
+  });
+
   it("shows runs list when deliveries exist", () => {
     cy.get("body").then(($body) => {
       if ($body.find('[aria-label="View run steps"]').length > 0) {

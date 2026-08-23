@@ -12,6 +12,7 @@ export const PIPELINE = ["generate-candidates", "review-handles"];
 export const STEP_LABEL = {
   "generate-candidates": "Generate Candidates",
   "review-handles": "Review Handles",
+  "apply-unfollows": "Apply Unfollows",
 };
 
 export function stepStatus(step) {
@@ -32,6 +33,9 @@ export function toRun(d) {
     : [];
   const reviews = Array.isArray(ctx.reviews)
     ? ctx.reviews.filter((review) => review && typeof review.handle === "string")
+    : [];
+  const unfollows = Array.isArray(ctx.unfollows)
+    ? ctx.unfollows.filter((result) => result && typeof result.handle === "string")
     : [];
   const engineSteps = d.steps || [];
   const present = new Set(engineSteps.map((s) => s.taskName));
@@ -61,6 +65,7 @@ export function toRun(d) {
     errorDetail: failed?.detail ?? null,
     candidates,
     reviews,
+    unfollows,
     summary: {
       candidates: candidates.length,
       reviewed: reviews.length,
@@ -68,6 +73,21 @@ export function toRun(d) {
       unfollow: reviews.filter((review) => review.decision === "UNFOLLOW").length,
     },
     steps,
+  };
+}
+
+export function toUnfollow(d) {
+  let ctx = {};
+  try { ctx = typeof d.context === "string" ? JSON.parse(d.context || "{}") : d.context || {}; } catch {}
+  const step = (d.steps || []).find((candidate) => candidate.taskName === "apply-unfollow");
+  const result = ctx.unfollow || {};
+  return {
+    id: d.sourceId,
+    sweepId: ctx.sweepId,
+    handle: result.handle || ctx.handle,
+    status: result.status === "APPLIED" ? "APPLIED" : step?.result && step.result !== "SUCCESS" ? "FAILED" : "APPLYING",
+    appliedAt: result.appliedAt || null,
+    detail: step?.detail || null,
   };
 }
 
@@ -86,10 +106,46 @@ export function furthestStep(run) {
 
 // Fetch runs from the outcome-engine.
 export async function fetchRuns() {
-  const r = await fetch(`${OUTCOME_ENGINE_ADDR}/api/v1/outcome-deliveries?outcomeName=sweep-run`);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const data = await r.json();
-  return (Array.isArray(data) ? data : []).map(toRun)
+  const [runsResponse, unfollowsResponse] = await Promise.all([
+    fetch(`${OUTCOME_ENGINE_ADDR}/api/v1/outcome-deliveries?outcomeName=sweep-run`),
+    fetch(`${OUTCOME_ENGINE_ADDR}/api/v1/outcome-deliveries?outcomeName=sweep-unfollow`),
+  ]);
+  if (!runsResponse.ok) throw new Error(`HTTP ${runsResponse.status}`);
+  if (!unfollowsResponse.ok) throw new Error(`HTTP ${unfollowsResponse.status}`);
+  const [runData, unfollowData] = await Promise.all([runsResponse.json(), unfollowsResponse.json()]);
+  const applications = (Array.isArray(unfollowData) ? unfollowData : []).map(toUnfollow);
+  const latestByDecision = new Map();
+  for (const application of applications) {
+    const key = `${application.sweepId}:${String(application.handle).toLowerCase()}`;
+    if (!latestByDecision.has(key)) latestByDecision.set(key, application);
+  }
+  return (Array.isArray(runData) ? runData : []).map(toRun)
+    .map((run) => {
+      const autoStep = run.steps.find((step) => step.key === "apply-unfollows");
+      return {
+        ...run,
+        reviews: run.reviews.map((review) => {
+          const separatelyApplied = latestByDecision.get(
+            `${run.sourceId}:${review.handle.toLowerCase()}`,
+          );
+          const automaticResult = run.unfollows.find(
+            (result) => result.handle.toLowerCase() === review.handle.toLowerCase(),
+          );
+          const automaticApplication = automaticResult
+            ? { ...automaticResult, status: automaticResult.status || "APPLIED" }
+            : run.mode === "auto-unfollow" && review.decision === "UNFOLLOW"
+              ? {
+                  status: autoStep?.status === "FAILED" ? "FAILED" : "APPLYING",
+                  detail: autoStep?.detail || null,
+                }
+              : null;
+          return {
+            ...review,
+            application: separatelyApplied || automaticApplication,
+          };
+        }),
+      };
+    })
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
@@ -114,6 +170,23 @@ export async function triggerRun({ id = crypto.randomUUID(), mode = "dry-run", c
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id, mode, count }),
+  });
+  if (r.status !== 202) {
+    let detail = `HTTP ${r.status}`;
+    try {
+      const body = await r.json();
+      if (body?.detail) detail = body.detail;
+    } catch {}
+    throw new Error(detail);
+  }
+  return await r.json();
+}
+
+export async function triggerUnfollow({ sweepId, handle, id = crypto.randomUUID() }) {
+  const r = await fetch(`${SWEEPER_AGENT_ADDR}/api/v1/sweeps/${sweepId}/unfollows`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, handle }),
   });
   if (r.status !== 202) {
     let detail = `HTTP ${r.status}`;
