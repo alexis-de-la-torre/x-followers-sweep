@@ -1,4 +1,7 @@
 .venv
+**/.next
+**/node_modules
+**/.pytest_cache
 __pycache__
 *.pyc
 .env
@@ -6,6 +9,7 @@ __pycache__
 shots
 screenshots
 chrome-profile
+artifacts
 *.md
 *.json
 progress.json

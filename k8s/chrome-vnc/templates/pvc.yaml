@@ -6,7 +6,7 @@ metadata:
     {{- include "chrome-vnc.labels" . | nindent 4 }}
 spec:
   accessModes:
-    - ReadWriteOnce
+    {{- toYaml .Values.chromeProfile.accessModes | nindent 4 }}
   resources:
     requests:
       storage: {{ .Values.chromeProfile.storageSize | default "2Gi" }}

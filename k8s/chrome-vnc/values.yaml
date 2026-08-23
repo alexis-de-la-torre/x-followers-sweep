@@ -29,21 +29,51 @@ resources:
 
 chromeProfile:
   storageSize: 2Gi
+  accessModes:
+    - ReadWriteOnce
+
+terminationGracePeriodSeconds: 40
+
+chrome:
+  startupTimeoutSeconds: 30
+  shutdownTimeoutSeconds: 20
+  # The first StatefulSet rollout replaces a legacy Deployment whose pod can
+  # remain alive for its 30-second termination grace period after leaving the
+  # Service. Later StatefulSet restarts retain the same hostname and recover
+  # dead local locks immediately.
+  staleLockQuietSeconds: 35
+  staleLockWaitTimeoutSeconds: 90
+
+startupProbe:
+  exec:
+    command:
+      - python3
+      - /opt/chrome-healthcheck.py
+      - http://127.0.0.1:9223/json/version
+      - http://127.0.0.1:9222/json/version
+  periodSeconds: 2
+  timeoutSeconds: 3
+  failureThreshold: 60
 
 livenessProbe:
   exec:
     command:
       - python3
-      - -c
-      - "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 9222)); s.close()"
-  initialDelaySeconds: 30
-  periodSeconds: 30
+      - /opt/chrome-healthcheck.py
+      - http://127.0.0.1:9223/json/version
+      - http://127.0.0.1:9222/json/version
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
 
 readinessProbe:
   exec:
     command:
       - python3
-      - -c
-      - "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 9222)); s.close()"
-  initialDelaySeconds: 15
-  periodSeconds: 15
+      - /opt/chrome-healthcheck.py
+      - http://127.0.0.1:9223/json/version
+      - http://127.0.0.1:9222/json/version
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 1
+  successThreshold: 1

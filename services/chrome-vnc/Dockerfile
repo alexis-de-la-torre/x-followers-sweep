@@ -2,17 +2,18 @@
 FROM python:3.11-slim
 
 LABEL description="X Followers Sweep - Chrome + VNC browser access"
-LABEL version="1.0"
+LABEL version="1.1"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV DISPLAY=:99
 ENV CHROME_PROFILE_DIR=/chrome-profile
 ENV CDP_PORT=9222
+ENV CHROME_CDP_PORT=9223
 ENV VNC_PORT=5900
 ENV NOVNC_PORT=6080
 
 RUN apt-get update && apt-get install -y \
-    wget gnupg ca-certificates curl git \
+    wget gnupg ca-certificates curl git util-linux \
     xvfb x11vnc fluxbox \
     && rm -rf /var/lib/apt/lists/*
 
@@ -32,10 +33,13 @@ RUN git clone --depth 1 https://github.com/novnc/noVNC.git /opt/noVNC \
 
 COPY services/chrome-vnc/entrypoint.sh /entrypoint.sh
 COPY services/chrome-vnc/cdp-proxy.py /opt/cdp-proxy.py
-RUN chmod +x /entrypoint.sh
+COPY services/chrome-vnc/chrome-healthcheck.py /opt/chrome-healthcheck.py
+RUN chmod +x /entrypoint.sh /opt/chrome-healthcheck.py
 
 EXPOSE $CDP_PORT $VNC_PORT $NOVNC_PORT
 
 VOLUME ["/chrome-profile"]
+
+STOPSIGNAL SIGTERM
 
 ENTRYPOINT ["/entrypoint.sh"]
