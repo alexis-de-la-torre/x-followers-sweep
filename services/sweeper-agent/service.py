@@ -446,7 +446,16 @@ class BrowserSweepExecutor:
         try:
             browser = BrowserTools(ws, psid)
             await browser.navigate(f"https://x.com/{handle.lstrip('@')}")
-            await browser.unfollow_current_profile()
+            try:
+                await browser.unfollow_current_profile()
+            except RuntimeError as exc:
+                if str(exc) == "profile is not currently followed":
+                    return {
+                        "handle": handle,
+                        "status": "ALREADY_UNFOLLOWED",
+                        "detail": str(exc),
+                    }
+                raise
             return {
                 "handle": handle,
                 "status": "APPLIED",
@@ -458,8 +467,17 @@ class BrowserSweepExecutor:
     async def apply_unfollows(self, reviews: list[dict]) -> list[dict]:
         results = []
         for review in reviews:
-            if review.get("decision") == "UNFOLLOW":
-                results.append(await self.apply_unfollow(str(review["handle"])))
+            if review.get("decision") != "UNFOLLOW":
+                continue
+            handle = str(review["handle"])
+            try:
+                results.append(await self.apply_unfollow(handle))
+            except Exception as exc:
+                results.append({
+                    "handle": handle,
+                    "status": "FAILED",
+                    "detail": str(exc) or exc.__class__.__name__,
+                })
         return results
 
 

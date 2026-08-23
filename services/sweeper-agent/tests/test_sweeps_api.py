@@ -7,6 +7,7 @@ message publisher is replaced at the service boundary.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import tempfile
@@ -29,6 +30,11 @@ import service  # noqa: E402
 
 SWEEP_ID = "0198d8f7-96cd-7a42-97a1-b359af601895"
 UNFOLLOW_ID = "0198d8f7-96cd-7a42-97a1-b359af601896"
+
+
+class FakeWebSocket:
+    async def close(self) -> None:
+        pass
 
 
 class RecordingPublisher:
@@ -91,6 +97,60 @@ def test_accepts_exactly_one_reviewed_unfollow_as_a_product_owned_delivery(
     }
     assert [step["name"] for step in command["flow"]["steps"]] == ["apply-unfollow"]
     assert command["flow"]["adjacencyList"] == [{"from": "apply-unfollow", "to": "END"}]
+
+
+def test_applying_an_already_unfollowed_profile_returns_a_persisted_noop(monkeypatch) -> None:
+    class AlreadyUnfollowedBrowser:
+        def __init__(self, _ws, _psid: str) -> None:
+            pass
+
+        async def navigate(self, _url: str) -> None:
+            pass
+
+        async def unfollow_current_profile(self) -> None:
+            raise RuntimeError("profile is not currently followed")
+
+    async def connect_chrome():
+        return FakeWebSocket(), "session-1"
+
+    monkeypatch.setattr(service, "_connect_chrome", connect_chrome)
+    monkeypatch.setattr(service, "BrowserTools", AlreadyUnfollowedBrowser)
+
+    result = asyncio.run(service.BrowserSweepExecutor().apply_unfollow("@already-gone"))
+
+    assert result == {
+        "handle": "@already-gone",
+        "status": "ALREADY_UNFOLLOWED",
+        "detail": "profile is not currently followed",
+    }
+
+
+def test_auto_unfollow_persists_every_profile_result_and_continues_after_failure(monkeypatch) -> None:
+    executor = service.BrowserSweepExecutor()
+    attempted: list[str] = []
+
+    async def apply(handle: str) -> dict:
+        attempted.append(handle)
+        if handle == "@broken":
+            raise RuntimeError("X did not load the confirmation")
+        return {"handle": handle, "status": "APPLIED", "appliedAt": "now"}
+
+    monkeypatch.setattr(executor, "apply_unfollow", apply)
+    reviews = [
+        {"handle": "@first", "decision": "UNFOLLOW"},
+        {"handle": "@keep", "decision": "KEEP"},
+        {"handle": "@broken", "decision": "UNFOLLOW"},
+        {"handle": "@last", "decision": "UNFOLLOW"},
+    ]
+
+    results = asyncio.run(executor.apply_unfollows(reviews))
+
+    assert attempted == ["@first", "@broken", "@last"]
+    assert results == [
+        {"handle": "@first", "status": "APPLIED", "appliedAt": "now"},
+        {"handle": "@broken", "status": "FAILED", "detail": "X did not load the confirmation"},
+        {"handle": "@last", "status": "APPLIED", "appliedAt": "now"},
+    ]
 
 
 @pytest.mark.parametrize("handle", ["@keep", "@unknown"])

@@ -81,13 +81,16 @@ export function toUnfollow(d) {
   try { ctx = typeof d.context === "string" ? JSON.parse(d.context || "{}") : d.context || {}; } catch {}
   const step = (d.steps || []).find((candidate) => candidate.taskName === "apply-unfollow");
   const result = ctx.unfollow || {};
+  const persistedStatus = ["APPLIED", "ALREADY_UNFOLLOWED", "FAILED"].includes(result.status)
+    ? result.status
+    : null;
   return {
     id: d.sourceId,
     sweepId: ctx.sweepId,
     handle: result.handle || ctx.handle,
-    status: result.status === "APPLIED" ? "APPLIED" : step?.result && step.result !== "SUCCESS" ? "FAILED" : "APPLYING",
+    status: persistedStatus || (step?.result && step.result !== "SUCCESS" ? "FAILED" : "APPLYING"),
     appliedAt: result.appliedAt || null,
-    detail: step?.detail || null,
+    detail: result.detail || step?.detail || null,
   };
 }
 
@@ -133,10 +136,12 @@ export async function fetchRuns() {
           );
           const automaticApplication = automaticResult
             ? { ...automaticResult, status: automaticResult.status || "APPLIED" }
-            : run.mode === "auto-unfollow" && review.decision === "UNFOLLOW"
+            : run.mode === "auto-unfollow"
+                && review.decision === "UNFOLLOW"
+                && autoStep?.status === "IN_PROGRESS"
               ? {
-                  status: autoStep?.status === "FAILED" ? "FAILED" : "APPLYING",
-                  detail: autoStep?.detail || null,
+                  status: "APPLYING",
+                  detail: null,
                 }
               : null;
           return {
