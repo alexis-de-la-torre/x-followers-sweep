@@ -9,12 +9,19 @@ describe("X Sweeper Web", () => {
   });
 
   it("loads the runs page", () => {
-    cy.contains("Sweep Runs").should("be.visible");
+    cy.get('[data-testid="runs-heading"]').should("have.text", "Runs");
     cy.get("nav, footer, [role=navigation]").should("exist");
   });
 
-  it("shows the agent status bar", () => {
-    cy.contains(/Agent online|Agent unreachable|Checking agent/).should("be.visible");
+  it("shows agent details from the information icon", () => {
+    cy.get('[aria-label="Agent information"]').click();
+    cy.get('[role="dialog"]').within(() => {
+      cy.contains("Agent information").should("be.visible");
+      cy.contains("Agent").should("be.visible");
+      cy.contains(/Online|Unreachable|Checking/).should("be.visible");
+      cy.contains("Chrome").should("be.visible");
+      cy.contains("Model").should("be.visible");
+    });
   });
 
   it("has a working Status tab", () => {
@@ -68,8 +75,11 @@ describe("X Sweeper Web", () => {
     cy.get("body").then(($body) => {
       if ($body.find('[aria-label="View run steps"]').length > 0) {
         cy.get('[aria-label="View run steps"]').should("be.visible");
+        cy.get('[data-testid="run-title-row"]').first().within(() => {
+          cy.get('[data-testid="run-mode"]').should("contain.text", "run");
+        });
       } else {
-        cy.contains("Sweep Runs").should("be.visible");
+        cy.get('[data-testid="runs-heading"]').should("have.text", "Runs");
       }
     });
   });
