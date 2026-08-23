@@ -79,6 +79,7 @@ export function toRun(d) {
 export function toUnfollow(d) {
   let ctx = {};
   try { ctx = typeof d.context === "string" ? JSON.parse(d.context || "{}") : d.context || {}; } catch {}
+  const params = ctx.params || {};
   const step = (d.steps || []).find((candidate) => candidate.taskName === "apply-unfollow");
   const result = ctx.unfollow || {};
   const persistedStatus = ["APPLIED", "ALREADY_UNFOLLOWED", "FAILED"].includes(result.status)
@@ -86,8 +87,9 @@ export function toUnfollow(d) {
     : null;
   return {
     id: d.sourceId,
-    sweepId: ctx.sweepId,
-    handle: result.handle || ctx.handle,
+    sweepId: params.sweepId || ctx.sweepId,
+    handle: result.handle || params.handle || ctx.handle,
+    xUserId: result.xUserId || params.xUserId || ctx.xUserId,
     status: persistedStatus || (step?.result && step.result !== "SUCCESS" ? "FAILED" : "APPLYING"),
     appliedAt: result.appliedAt || null,
     detail: result.detail || step?.detail || null,
@@ -187,11 +189,11 @@ export async function triggerRun({ id = crypto.randomUUID(), mode = "dry-run", c
   return await r.json();
 }
 
-export async function triggerUnfollow({ sweepId, handle, id = crypto.randomUUID() }) {
+export async function triggerUnfollow({ sweepId, handle, xUserId, id = crypto.randomUUID() }) {
   const r = await fetch(`${SWEEPER_AGENT_ADDR}/api/v1/sweeps/${sweepId}/unfollows`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id, handle }),
+    body: JSON.stringify({ id, handle, xUserId }),
   });
   if (r.status !== 202) {
     let detail = `HTTP ${r.status}`;

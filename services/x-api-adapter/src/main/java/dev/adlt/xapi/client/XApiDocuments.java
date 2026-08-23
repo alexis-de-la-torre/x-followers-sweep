@@ -35,8 +35,15 @@ public final class XApiDocuments {
             @JsonProperty("protected") Boolean protectedAccount,
             Boolean verified,
             @JsonProperty("public_metrics") PublicMetrics publicMetrics,
-            @JsonAlias({"most_recent_post_id", "most_recent_tweet_id"}) String mostRecentPostId
+            @JsonAlias({"most_recent_post_id", "most_recent_tweet_id"}) String mostRecentPostId,
+            @JsonProperty("connection_status") List<String> connectionStatus
     ) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record RelationshipEnvelope(RelationshipData data, List<XError> errors) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record RelationshipData(Boolean following) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record PublicMetrics(

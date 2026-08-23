@@ -82,7 +82,7 @@ class RecordingExecutor:
         self.fail = fail
         self.generate_calls: list[int] = []
         self.review_calls: list[tuple[list[str], str]] = []
-        self.unfollow_calls: list[str] = []
+        self.unfollow_calls: list[tuple[str, str]] = []
         self.unfollows_calls: list[list[dict]] = []
 
     async def generate_candidates(self, count: int) -> list[str]:
@@ -102,10 +102,16 @@ class RecordingExecutor:
         self.review_calls.append((handles, mode))
         return [{"handle": handle, "decision": "KEEP"} for handle in handles]
 
-    async def apply_unfollow(self, handle: str) -> dict:
+    async def apply_unfollow(self, handle: str, x_user_id: str) -> dict:
         self.events.append("execute:unfollow")
-        self.unfollow_calls.append(handle)
-        return {"handle": handle, "status": "APPLIED", "appliedAt": "2026-08-23T12:00:00+00:00"}
+        self.unfollow_calls.append((handle, x_user_id))
+        return {
+            "handle": handle,
+            "xUserId": x_user_id,
+            "status": "APPLIED",
+            "transport": "X_API",
+            "appliedAt": "2026-08-23T12:00:00+00:00",
+        }
 
     async def apply_unfollows(self, reviews: list[dict]) -> list[dict]:
         self.events.append("execute:auto-unfollow")
@@ -235,16 +241,20 @@ def test_apply_unfollow_task_uses_the_authorized_handle_and_persists_its_result(
     handler = SweepTaskHandler(
         publisher,
         executor,
-        lambda _: {"sweepId": "sweep-1", "handle": "@reviewed"},
+        lambda _: {
+            "params": {"sweepId": "sweep-1", "handle": "@reviewed", "xUserId": "42"}
+        },
     )
 
     run(handler.handle(new_task("apply-unfollow", "task-unfollow"), {}, broker_ack))
 
-    assert executor.unfollow_calls == ["@reviewed"]
+    assert executor.unfollow_calls == [("@reviewed", "42")]
     assert publisher.messages[-1][1]["contextPatch"] == {
         "unfollow": {
             "handle": "@reviewed",
+            "xUserId": "42",
             "status": "APPLIED",
+            "transport": "X_API",
             "appliedAt": "2026-08-23T12:00:00+00:00",
         }
     }

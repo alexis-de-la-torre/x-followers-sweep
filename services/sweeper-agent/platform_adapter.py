@@ -46,7 +46,7 @@ class SweepExecutor(Protocol):
         candidate_evidence: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]: ...
 
-    async def apply_unfollow(self, handle: str) -> dict[str, Any]: ...
+    async def apply_unfollow(self, handle: str, x_user_id: str) -> dict[str, Any]: ...
 
     async def apply_unfollows(self, reviews: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
 
@@ -137,6 +137,7 @@ def unfollow_delivery_command(
     sweep_id: str,
     sweep_delivery_id: str,
     handle: str,
+    x_user_id: str,
 ) -> dict[str, Any]:
     """Build a separately user-triggered delivery for one reviewed decision."""
 
@@ -147,9 +148,12 @@ def unfollow_delivery_command(
         "outcomeName": "sweep-unfollow",
         "outcomeDeliveryContext": {
             "origin": FULFILLER_NAME,
-            "sweepId": sweep_id,
-            "sweepDeliveryId": sweep_delivery_id,
-            "handle": handle,
+            "params": {
+                "sweepId": sweep_id,
+                "sweepDeliveryId": sweep_delivery_id,
+                "handle": handle,
+                "xUserId": x_user_id,
+            },
         },
         "flow": {
             "id": "default",
@@ -299,10 +303,13 @@ class SweepTaskHandler:
             )
             return {"reviews": reviews}
         if task.outcome_task_name == "apply-unfollow":
-            handle = str(context.get("handle", ""))
+            handle = str(params.get("handle", ""))
+            x_user_id = str(params.get("xUserId", ""))
             if not handle:
                 raise ValueError("MISSING_UNFOLLOW_HANDLE")
-            return {"unfollow": await self.executor.apply_unfollow(handle)}
+            if not x_user_id:
+                raise ValueError("MISSING_UNFOLLOW_X_USER_ID")
+            return {"unfollow": await self.executor.apply_unfollow(handle, x_user_id)}
         if task.outcome_task_name == "apply-unfollows":
             reviews = context.get("reviews", [])
             if not isinstance(reviews, list):

@@ -89,6 +89,54 @@ class XApiClientIntegrationTest {
     }
 
     @Test
+    void readsThenDeletesOneRelationshipByStableTargetId() {
+        AtomicReference<String> relationshipAuthorization = new AtomicReference<>();
+        AtomicReference<String> relationshipQuery = new AtomicReference<>();
+        AtomicReference<String> deleteAuthorization = new AtomicReference<>();
+
+        server.createContext("/2/users/me", exchange -> respond(exchange, 200, """
+                {"data":{"id":"1478416609","username":"dlt_alx","name":"AlexisDLT"}}
+                """));
+        server.createContext("/2/users/42", exchange -> {
+            relationshipAuthorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            relationshipQuery.set(exchange.getRequestURI().getRawQuery());
+            respond(exchange, 200, """
+                    {"data":{"id":"42","username":"reviewed","name":"Reviewed Account",
+                    "connection_status":["following","followed_by"]}}
+                    """);
+        });
+        server.createContext("/2/users/1478416609/following/42", exchange -> {
+            assertThat(exchange.getRequestMethod()).isEqualTo("DELETE");
+            deleteAuthorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            exchange.getResponseHeaders().add("x-rate-limit-limit", "50");
+            exchange.getResponseHeaders().add("x-rate-limit-remaining", "49");
+            exchange.getResponseHeaders().add("x-rate-limit-reset", "1787464500");
+            respond(exchange, 200, "{\"data\":{\"following\":false}}");
+        });
+
+        XAccountService service = new XAccountService(client());
+        XAccountService.Relationship before = service.relationship("42");
+        XAccountService.Unfollow applied = service.unfollow("42");
+
+        assertThat(relationshipAuthorization.get()).startsWith("OAuth ").contains("oauth_signature=");
+        assertThat(relationshipQuery.get()).contains("user.fields=").contains("connection_status");
+        assertThat(before.source().id()).isEqualTo("1478416609");
+        assertThat(before.target().id()).isEqualTo("42");
+        assertThat(before.target().username()).isEqualTo("reviewed");
+        assertThat(before.following()).isTrue();
+        assertThat(before.connectionStatus()).containsExactly("following", "followed_by");
+        assertThat(before.returnedResources()).isEqualTo(1);
+        assertThat(before.upstreamRequests()).isEqualTo(2);
+
+        assertThat(deleteAuthorization.get()).startsWith("OAuth ").contains("oauth_token=");
+        assertThat(applied.source().id()).isEqualTo("1478416609");
+        assertThat(applied.targetId()).isEqualTo("42");
+        assertThat(applied.following()).isFalse();
+        assertThat(applied.upstreamRequests()).isEqualTo(2);
+        assertThat(applied.rateLimit().remaining()).isEqualTo(49);
+    }
+
+    @Test
     void mapsCreditExhaustionWithoutLeakingTheUpstreamBody() {
         server.createContext("/2/users/me", exchange -> respond(exchange, 402,
                 "{\"detail\":\"upstream body deliberately not propagated\"}"));

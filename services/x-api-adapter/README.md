@@ -23,9 +23,16 @@ HTTP listens on 8030 and actuator on 8031 by default.
 
 - `GET /api/v1/account`
 - `GET /api/v1/account/following?limit=3`
+- `GET /api/v1/account/following/{stableXUserId}`
+- `DELETE /api/v1/account/following/{stableXUserId}`
 - `GET /api/v1/users/{id}/posts?limit=3`
 
 Following responses include the authenticated source account, stable target
 IDs, profile metrics, latest-post evidence when X supplies the expansion,
 pagination, returned-resource counts, upstream request counts, and rate-limit
 metadata. No token material is returned or logged.
+
+The target relationship lookup uses X's user `connection_status` field, so a
+before/after check costs one target resource instead of paginating the owner's
+entire Following list. The DELETE response and a subsequent relationship read
+must both report `following=false` before an action is persisted as applied.

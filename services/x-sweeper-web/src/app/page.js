@@ -300,7 +300,11 @@ export default function RunsPage() {
     setApplyingUnfollow(true);
     setUnfollowError(null);
     try {
-      await triggerUnfollow({ sweepId: stepsRun.sourceId, handle: confirmUnfollow.handle });
+      await triggerUnfollow({
+        sweepId: stepsRun.sourceId,
+        handle: confirmUnfollow.handle,
+        xUserId: confirmUnfollow.xUserId,
+      });
       setConfirmUnfollow(null);
       setReloadKey((key) => key + 1);
     } catch (e) {

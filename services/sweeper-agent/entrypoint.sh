@@ -9,7 +9,7 @@ echo " X Followers Sweep — Agent"
 echo " Model: ${JUDGE_MODEL:-deepseek/deepseek-v4-flash}"
 if [ -n "${X_API_ADAPTER_URL:-}" ]; then
   echo " X reads: ${X_API_ADAPTER_URL}"
-  echo " X writes: chrome-vnc:9222 (M1 compatibility path)"
+  echo " X writes: ${X_API_ADAPTER_URL}"
 else
   echo " X reads/writes: chrome-vnc:9222"
 fi
