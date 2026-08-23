@@ -23,8 +23,8 @@ export default function StatusPage() {
   const ok = status?.service === "ok";
 
   return (
-    <Box bg="gray.2" mih="calc(100dvh - var(--app-shell-header-height, 46px) - var(--app-shell-footer-height, 56px))">
-      <Container size="sm" bg="white" mih="calc(100dvh - var(--app-shell-header-height, 46px) - var(--app-shell-footer-height, 56px))" pb="xl">
+    <Box bg="gray.2" mih="calc(100dvh - var(--app-shell-header-height, 46px) - var(--app-shell-footer-height, 74px))">
+      <Container size="sm" bg="white" mih="calc(100dvh - var(--app-shell-header-height, 46px) - var(--app-shell-footer-height, 74px))" pb="xl">
         <Box pos="sticky" bg="white" mx="calc(-1 * var(--mantine-spacing-md))" px="md"
              style={{ top: "var(--app-shell-header-height, 46px)", zIndex: 5 }}>
           <Group gap={6} py="xs">

@@ -1,5 +1,7 @@
 import { MantineProvider, ColorSchemeScript } from "@mantine/core";
 import AppLayout from "@/components/AppLayout";
+import PersistentBottomNav from "@/components/PersistentBottomNav";
+import SweepSettingsProvider from "@/components/SweepSettingsProvider";
 import "./globals.css";
 
 export const metadata = {
@@ -15,7 +17,10 @@ export default function RootLayout({ children }) {
       </head>
       <body suppressHydrationWarning>
         <MantineProvider>
-          <AppLayout>{children}</AppLayout>
+          <SweepSettingsProvider>
+            <AppLayout>{children}</AppLayout>
+            <PersistentBottomNav />
+          </SweepSettingsProvider>
         </MantineProvider>
       </body>
     </html>
