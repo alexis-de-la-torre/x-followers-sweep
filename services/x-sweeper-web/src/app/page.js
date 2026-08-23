@@ -355,12 +355,16 @@ export default function RunsPage() {
                    data-active-sweep={r.sourceId === activeSweepId ? "true" : undefined}>
                 {i > 0 && <Divider mx="calc(-1 * var(--mantine-spacing-md))" />}
                 <Box py="md">
-                  <Group gap={8} wrap="nowrap" align="center">
+                  <Group gap={8} wrap="nowrap" align="center" data-testid="run-title-row">
                     <Box component="span" c={overallStatus(r) === "FAILED" ? "red.6" : "dark.6"}
                          style={{ display: "inline-flex", flexShrink: 0 }}>
                       {stepGlyph(overallStatus(r), 16, { double: overallStatus(r) === "DONE" })}
                     </Box>
                     <Text fw={600} size="sm" truncate style={{ minWidth: 0 }}>{r.title}</Text>
+                    <Badge variant="light" color="gray" size="xs" radius="sm"
+                           data-testid="run-mode" style={{ flexShrink: 0 }}>
+                      {r.mode}
+                    </Badge>
                     <Text span size="xs" c="dimmed" style={{ flexShrink: 0, whiteSpace: "nowrap" }}>
                       {"· "}
                       <span title={fmtDateTime(r.lastActivityAt)}
@@ -369,14 +373,11 @@ export default function RunsPage() {
                       </span>
                     </Text>
                   </Group>
-                  <Group gap={6} mt={4} wrap="nowrap">
-                    <Badge variant="light" color="gray" size="xs" radius="sm" style={{ flexShrink: 0 }}>
-                      {r.mode}
-                    </Badge>
-                    {r.handle && (
+                  {r.handle && (
+                    <Group gap={6} mt={4} wrap="nowrap">
                       <Text size="xs" c="dimmed" truncate style={{ minWidth: 0 }}>{r.handle}</Text>
-                    )}
-                  </Group>
+                    </Group>
+                  )}
                   <RunStatusSummary run={r} onOpen={() => setStepsRun(r)} />
                   {r.reviews.length > 0 && (
                     <Text size="xs" c="dimmed" mt={6}>

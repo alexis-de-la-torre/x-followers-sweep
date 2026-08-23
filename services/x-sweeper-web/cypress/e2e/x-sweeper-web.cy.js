@@ -68,6 +68,9 @@ describe("X Sweeper Web", () => {
     cy.get("body").then(($body) => {
       if ($body.find('[aria-label="View run steps"]').length > 0) {
         cy.get('[aria-label="View run steps"]').should("be.visible");
+        cy.get('[data-testid="run-title-row"]').first().within(() => {
+          cy.get('[data-testid="run-mode"]').should("contain.text", "run");
+        });
       } else {
         cy.contains("Sweep Runs").should("be.visible");
       }
