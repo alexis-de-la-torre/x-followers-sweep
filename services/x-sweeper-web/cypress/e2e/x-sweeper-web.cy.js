@@ -33,6 +33,13 @@ describe("X Sweeper Web", () => {
     cy.contains("Automatically apply every UNFOLLOW recommendation").should("be.visible");
   });
 
+  it("lets the user increase a sweep beyond three accounts", () => {
+    cy.get('[data-testid="sweep-count"]').should("have.value", "3 accounts").click();
+    cy.get('[role="option"]').contains("10 accounts").click();
+    cy.get('[data-testid="sweep-count"]').should("have.value", "10 accounts");
+    cy.contains("Up to 30 accounts per sweep").should("be.visible");
+  });
+
   it("shows runs list when deliveries exist", () => {
     cy.get("body").then(($body) => {
       if ($body.find('[aria-label="View run steps"]').length > 0) {

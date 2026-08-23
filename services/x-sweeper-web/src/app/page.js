@@ -2,7 +2,7 @@
 
 // Sweep Runs — the outcome-engine-backed run list (data layer in src/lib/engine.js).
 import { useEffect, useRef, useState } from "react";
-import { Alert, Box, Button, Container, Divider, Group, Modal, Stack, Text, UnstyledButton, Card, Skeleton, Badge, Switch } from "@mantine/core";
+import { Alert, Box, Button, Container, Divider, Group, Modal, Stack, Text, UnstyledButton, Card, Skeleton, Badge, Switch, Select } from "@mantine/core";
 import { IconAlertTriangle, IconBrandTwitterFilled, IconCheck, IconChecks, IconCircleDashed, IconClock, IconLoader2, IconPlayerPlay, IconX } from "@tabler/icons-react";
 import { fetchRuns, fetchAgentStatus, triggerRun, triggerUnfollow, overallStatus, furthestStep } from "@/lib/engine";
 import { fmtMs, fmtDateTime, fmtTime, fmtStamp, relativeTime } from "@/lib/format";
@@ -230,6 +230,7 @@ export default function RunsPage() {
   const [applyingUnfollow, setApplyingUnfollow] = useState(false);
   const [unfollowError, setUnfollowError] = useState(null);
   const [autoUnfollow, setAutoUnfollow] = useState(false);
+  const [sweepCount, setSweepCount] = useState(3);
 
   useEffect(() => {
     let active = true;
@@ -262,7 +263,10 @@ export default function RunsPage() {
     setTriggering(true);
     setTriggerError(null);
     try {
-      const accepted = await triggerRun({ mode: autoUnfollow ? "auto-unfollow" : "dry-run", count: 3 });
+      const accepted = await triggerRun({
+        mode: autoUnfollow ? "auto-unfollow" : "dry-run",
+        count: sweepCount,
+      });
       setActiveSweepId(accepted.id);
       setTriggering(false);
       setReloadKey((key) => key + 1);
@@ -321,6 +325,23 @@ export default function RunsPage() {
             onChange={(event) => setAutoUnfollow(event.currentTarget.checked)}
             label="Automatically apply every UNFOLLOW recommendation"
             data-testid="auto-unfollow"
+          />
+          <Select
+            size="xs"
+            mb="xs"
+            w={180}
+            label="Accounts per sweep"
+            description="Up to 30 accounts per sweep"
+            data={[
+              { value: "3", label: "3 accounts" },
+              { value: "10", label: "10 accounts" },
+              { value: "20", label: "20 accounts" },
+              { value: "30", label: "30 accounts" },
+            ]}
+            value={String(sweepCount)}
+            onChange={(value) => value && setSweepCount(Number(value))}
+            allowDeselect={false}
+            data-testid="sweep-count"
           />
           <Divider mx="calc(-1 * var(--mantine-spacing-md))" />
         </Box>
