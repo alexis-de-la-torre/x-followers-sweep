@@ -13,6 +13,7 @@
     "test:e2e:swp-4:local": "cypress run --spec cypress/e2e/swp-4-durable-acceptance-staging.cy.js --config baseUrl=http://127.0.0.1:3000 --env RUN_SWP_4=true,OUTCOME_ENGINE_URL=http://127.0.0.1:8090,SWEEPER_AGENT_URL=http://127.0.0.1:8020",
     "test:e2e:swp-6:local": "cypress run --spec cypress/e2e/swp-6-complete-sweep-local.cy.js --config baseUrl=http://127.0.0.1:3000 --env RUN_SWP_6=true,OUTCOME_ENGINE_URL=http://127.0.0.1:8090,SWEEPER_AGENT_URL=http://127.0.0.1:8020",
     "test:e2e:swp-4": "cypress run --spec cypress/e2e/swp-4-durable-acceptance-staging.cy.js --config baseUrl=https://x-sweeper-web.s26.staging.adlt.dev --env RUN_SWP_4_STAGING=true",
+    "test:e2e:swp-31": "cypress run --spec cypress/e2e/swp-31-x-api-review-staging.cy.js --config baseUrl=https://x-sweeper-web.s26.staging.adlt.dev --env RUN_SWP_31=true",
     "test:e2e:swp-30": "cypress run --spec cypress/e2e/swp-30-apply-reviewed-unfollow-staging.cy.js --config baseUrl=https://x-sweeper-web.s26.staging.adlt.dev --env RUN_SWP_30=true"
   },
   "dependencies": {

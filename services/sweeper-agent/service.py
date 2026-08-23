@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""X cleanup fulfiller backed by authenticated Chrome and an LLM reviewer."""
+"""X cleanup fulfiller backed by official X API reads and an LLM reviewer."""
 
 import asyncio, inspect, json, os, re, time, uuid
 from contextlib import asynccontextmanager
@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 
 from tools import BrowserTools
+from x_api_adapter import XApiAdapterClient
 from platform_adapter import (
     DELIVER_TOPIC,
     GooglePubSubPublisher,
@@ -119,7 +120,7 @@ async def _connect_chrome():
 
 REVIEW_SYSTEM_PROMPT = """You are an X (Twitter) cleanup reviewer for @dlt_alx.
 
-You receive profile evidence collected from an authenticated browser. Decide whether each
+You receive structured profile evidence from the authenticated X account. Decide whether each
 account should be kept or marked as an unfollow candidate. This is a dry run: you only make
 and explain decisions; you never perform account changes.
 
@@ -236,7 +237,7 @@ REVIEW_BATCH_SIZE = 20
 
 async def _decide_review_batch(profiles: list[dict], handles: list[str]) -> list[dict]:
     """Ask the configured model for one complete, validated bounded review batch."""
-    prompt = "Review this browser evidence:\n" + json.dumps(profiles, ensure_ascii=False)
+    prompt = "Review this profile evidence:\n" + json.dumps(profiles, ensure_ascii=False)
     previous = ""
     validation_error = ""
     for attempt in range(2):
@@ -281,7 +282,15 @@ async def lifespan(app: FastAPI):
         try:
             settings = PubSubSettings.from_env()
             publisher = GooglePubSubPublisher(settings.project_id, settings.topic_prefix)
-            executor = BrowserSweepExecutor()
+            adapter_url = os.environ.get("X_API_ADAPTER_URL", "").strip()
+            if adapter_url:
+                adapter = XApiAdapterClient(adapter_url)
+                executor = ApiSweepExecutor(adapter, BrowserSweepExecutor())
+                app.state.x_api_adapter = adapter
+                app.state.sweep_executor = executor
+            else:
+                executor = BrowserSweepExecutor()
+                app.state.sweep_executor = executor
             handler = SweepTaskHandler(publisher, executor, OutcomeEngineContextLoader(settings.outcome_engine_url))
             platform_runtime = PubSubRuntime(settings, handler, publisher)
             platform_runtime.start(asyncio.get_running_loop())
@@ -292,17 +301,29 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             app.state.platform_error = str(e)
             print(f"Outcome Engine fulfiller: {e}", flush=True)
-    # Startup: verify Chrome and config
-    try:
-        ws, psid = await _connect_chrome()
-        await ws.close()
-        print("Chrome CDP: OK", flush=True)
-    except Exception as e:
-        print(f"Chrome CDP: {e}", flush=True)
+    adapter = getattr(app.state, "x_api_adapter", None)
+    if adapter is not None:
+        try:
+            account = await adapter.account()
+            app.state.x_account = account
+            print(f"X API: authorized as @{account.get('username', 'unknown')}", flush=True)
+        except Exception as e:
+            app.state.x_api_error = str(e)
+            print(f"X API: {e}", flush=True)
+    else:
+        try:
+            ws, psid = await _connect_chrome()
+            await ws.close()
+            print("Chrome CDP: OK", flush=True)
+        except Exception as e:
+            print(f"Chrome CDP: {e}", flush=True)
     print(f"Model: {JUDGE_MODEL}", flush=True)
     yield
     if platform_runtime is not None:
         await platform_runtime.stop()
+    adapter = getattr(app.state, "x_api_adapter", None)
+    if adapter is not None:
+        await adapter.close()
 
 app = FastAPI(title="X Cleanup Service v2 (LLM-driven)", version="2.0.0", lifespan=lifespan)
 
@@ -449,7 +470,12 @@ class BrowserSweepExecutor:
         response = await generate_candidates(CandidateRequest(count=count))
         return response.candidates
 
-    async def review_handles(self, handles: list[str], mode: str) -> list[dict]:
+    async def review_handles(
+        self,
+        handles: list[str],
+        mode: str,
+        candidate_evidence: list[dict] | None = None,
+    ) -> list[dict]:
         response = await review_handles(ReviewRequest(handles=handles, mode=mode))
         return [result.model_dump(exclude_none=True) for result in response.results]
 
@@ -493,17 +519,64 @@ class BrowserSweepExecutor:
         return results
 
 
+class ApiSweepExecutor:
+    """M1 executor: official X API reads, existing write path until the M2 API delete lands."""
+
+    def __init__(self, adapter: XApiAdapterClient, write_executor: BrowserSweepExecutor) -> None:
+        self.adapter = adapter
+        self.write_executor = write_executor
+
+    async def generate_candidates(self, count: int) -> dict:
+        return await self.adapter.following(count)
+
+    async def review_handles(
+        self,
+        handles: list[str],
+        mode: str,
+        candidate_evidence: list[dict] | None = None,
+    ) -> list[dict]:
+        evidence = candidate_evidence or []
+        by_handle = {
+            str(profile.get("handle", "")).casefold(): profile
+            for profile in evidence
+            if isinstance(profile, dict)
+        }
+        missing = [handle for handle in handles if handle.casefold() not in by_handle]
+        if missing:
+            raise ValueError(f"X_API_EVIDENCE_MISSING: {', '.join(missing)}")
+        profiles = [by_handle[handle.casefold()] for handle in handles]
+        decisions = await _decide_reviews(profiles, handles)
+        for decision in decisions:
+            profile = by_handle[decision["handle"].casefold()]
+            decision["xUserId"] = profile["xUserId"]
+        return decisions
+
+    async def apply_unfollow(self, handle: str) -> dict:
+        return await self.write_executor.apply_unfollow(handle)
+
+    async def apply_unfollows(self, reviews: list[dict]) -> list[dict]:
+        return await self.write_executor.apply_unfollows(reviews)
+
+
 @app.get("/health")
 async def health():
     status = {"service": "ok", "model": JUDGE_MODEL}
-    try:
-        # Probes run frequently and have a short timeout. Checking Chrome's CDP
-        # discovery document proves it is reachable without opening and tearing
-        # down a browser WebSocket session for every liveness/readiness request.
-        await _get_cdp_url()
-        status["chrome"] = "ok"
-    except Exception as e:
-        status["chrome"] = f"error: {e}"
+    adapter = getattr(app.state, "x_api_adapter", None)
+    if adapter is not None:
+        account = getattr(app.state, "x_account", None)
+        status["xApi"] = {
+            "configured": True,
+            "account": f"@{account.get('username')}" if isinstance(account, dict) and account.get("username") else None,
+            "error": getattr(app.state, "x_api_error", None),
+        }
+    else:
+        try:
+            # Probes run frequently and have a short timeout. Checking Chrome's CDP
+            # discovery document proves it is reachable without opening a WebSocket.
+            await _get_cdp_url()
+            status["chrome"] = "ok"
+        except Exception as e:
+            status["chrome"] = f"error: {e}"
     status["openrouter"] = "configured"
     runtime = getattr(app.state, "platform_runtime", None)
     if runtime is not None:
