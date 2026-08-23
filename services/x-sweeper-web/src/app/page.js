@@ -2,8 +2,8 @@
 
 // Sweep Runs — the outcome-engine-backed run list (data layer in src/lib/engine.js).
 import { useEffect, useRef, useState } from "react";
-import { Alert, Box, Button, Container, Divider, Group, Modal, Stack, Text, UnstyledButton, Card, Skeleton, Badge } from "@mantine/core";
-import { IconAlertTriangle, IconBrandTwitterFilled, IconCheck, IconChecks, IconCircleDashed, IconClock, IconLoader2, IconPlayerPlay, IconX } from "@tabler/icons-react";
+import { ActionIcon, Alert, Box, Button, Container, Divider, Group, Modal, Stack, Text, UnstyledButton, Card, Skeleton, Badge } from "@mantine/core";
+import { IconAlertTriangle, IconBrandTwitterFilled, IconCheck, IconChecks, IconCircleDashed, IconClock, IconInfoCircle, IconLoader2, IconPlayerPlay, IconX } from "@tabler/icons-react";
 import { fetchRuns, fetchAgentStatus, triggerRun, triggerUnfollow, overallStatus, furthestStep } from "@/lib/engine";
 import { fmtMs, fmtDateTime, fmtTime, fmtStamp, relativeTime } from "@/lib/format";
 import { useSweepSettings } from "@/components/SweepSettingsProvider";
@@ -189,34 +189,48 @@ function SweepResults({ run, onRequestUnfollow }) {
   );
 }
 
-// ─── Agent status bar ───
+// ─── Agent information ───
 
-function AgentStatusBar() {
+function AgentInfoButton() {
   const [status, setStatus] = useState(null);
+  const [opened, setOpened] = useState(false);
   useEffect(() => {
     fetchAgentStatus().then(setStatus);
     const iv = setInterval(() => fetchAgentStatus().then(setStatus), 15000);
     return () => clearInterval(iv);
   }, []);
   return (
-    <Group gap={6} mb="xs" wrap="nowrap" align="center">
-      <Box w={8} h={8} style={{
-        borderRadius: "50%",
-        background: status?.service === "ok" ? "var(--mantine-color-teal-6)"
-                  : status ? "var(--mantine-color-red-6)"
-                  : "var(--mantine-color-gray-4)",
-      }} />
-      <Text size="xs" c="dimmed">
-        {status?.service === "ok" ? "Agent online"
-         : status ? "Agent unreachable"
-         : "Checking agent…"}
-      </Text>
-      {status?.chrome === "ok" && (
-        <Text size="xs" c="dimmed">· Chrome OK</Text>
-      )}
-      {status?.model && (
-        <Text size="xs" c="dimmed">· {status.model}</Text>
-      )}
+    <>
+      <ActionIcon variant="subtle" color="gray" size="sm" aria-label="Agent information"
+                  onClick={() => setOpened(true)}>
+        <IconInfoCircle size={18} />
+      </ActionIcon>
+      <Modal opened={opened} onClose={() => setOpened(false)} centered size="xs" title="Agent information">
+        <Stack gap="sm">
+          <AgentInfoRow
+            label="Agent"
+            value={status?.service === "ok" ? "Online" : status ? "Unreachable" : "Checking…"}
+          />
+          <AgentInfoRow
+            label="Chrome"
+            value={status?.chrome === "ok" ? "OK" : status?.chrome ? "Unavailable" : "Checking…"}
+          />
+          <AgentInfoRow label="Model" value={status?.model || "—"} />
+          <AgentInfoRow
+            label="OpenRouter"
+            value={status?.openrouter === "configured" ? "Configured" : status ? "Unavailable" : "Checking…"}
+          />
+        </Stack>
+      </Modal>
+    </>
+  );
+}
+
+function AgentInfoRow({ label, value }) {
+  return (
+    <Group justify="space-between" gap="md" wrap="nowrap">
+      <Text size="sm" c="dimmed">{label}</Text>
+      <Text size="sm" fw={600} ta="right">{value}</Text>
     </Group>
   );
 }
@@ -302,25 +316,22 @@ export default function RunsPage() {
         <Box pos="sticky" bg="white" mx="calc(-1 * var(--mantine-spacing-md))" px="md"
              style={{ top: "var(--app-shell-header-height, 46px)", zIndex: 5 }}>
           <Group justify="space-between" py="xs">
-            <Group gap={6} wrap="nowrap">
-              <IconBrandTwitterFilled size={18} color="var(--mantine-color-gray-6)" />
-              <Text fw="bold">Sweep Runs</Text>
-            </Group>
+            <Text fw="bold" data-testid="runs-heading">Runs</Text>
             <Group gap="xs" wrap="nowrap">
               {runs && (
                 <Text size="xs" c="dimmed">
                   {runs.length}
-                  {inProgress > 0 && <Text span inherit c="teal.7"> · {inProgress} active</Text>}
-                  {failedCount > 0 && <Text span inherit c="red.7"> · {failedCount} failed</Text>}
+                  {inProgress > 0 && <Text span inherit> · {inProgress} active</Text>}
+                  {failedCount > 0 && <Text span inherit> · {failedCount} failed</Text>}
                 </Text>
               )}
+              <AgentInfoButton />
               <Button size="xs" variant="light" leftSection={<IconPlayerPlay size={14} />}
                       loading={triggering} disabled={!settingsReady} onClick={handleTrigger} data-testid="new-sweep">
                 New Run
               </Button>
             </Group>
           </Group>
-          <AgentStatusBar />
           <Divider mx="calc(-1 * var(--mantine-spacing-md))" />
         </Box>
 
