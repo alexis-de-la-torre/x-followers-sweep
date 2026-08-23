@@ -2,7 +2,7 @@
 
 // Sweep Runs — the outcome-engine-backed run list (data layer in src/lib/engine.js).
 import { useEffect, useRef, useState } from "react";
-import { Alert, Box, Button, Container, Divider, Group, Modal, Stack, Text, UnstyledButton, Card, Skeleton, Badge } from "@mantine/core";
+import { Alert, Box, Button, Container, Divider, Group, Modal, Stack, Text, UnstyledButton, Card, Skeleton, Badge, Switch } from "@mantine/core";
 import { IconAlertTriangle, IconBrandTwitterFilled, IconCheck, IconChecks, IconCircleDashed, IconClock, IconLoader2, IconPlayerPlay, IconX } from "@tabler/icons-react";
 import { fetchRuns, fetchAgentStatus, triggerRun, triggerUnfollow, overallStatus, furthestStep } from "@/lib/engine";
 import { fmtMs, fmtDateTime, fmtTime, fmtStamp, relativeTime } from "@/lib/format";
@@ -229,6 +229,7 @@ export default function RunsPage() {
   const [confirmUnfollow, setConfirmUnfollow] = useState(null);
   const [applyingUnfollow, setApplyingUnfollow] = useState(false);
   const [unfollowError, setUnfollowError] = useState(null);
+  const [autoUnfollow, setAutoUnfollow] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -261,7 +262,7 @@ export default function RunsPage() {
     setTriggering(true);
     setTriggerError(null);
     try {
-      const accepted = await triggerRun({ mode: "dry-run", count: 3 });
+      const accepted = await triggerRun({ mode: autoUnfollow ? "auto-unfollow" : "dry-run", count: 3 });
       setActiveSweepId(accepted.id);
       setTriggering(false);
       setReloadKey((key) => key + 1);
@@ -312,6 +313,15 @@ export default function RunsPage() {
             </Group>
           </Group>
           <AgentStatusBar />
+          <Switch
+            size="xs"
+            mb="xs"
+            color="orange"
+            checked={autoUnfollow}
+            onChange={(event) => setAutoUnfollow(event.currentTarget.checked)}
+            label="Automatically apply every UNFOLLOW recommendation"
+            data-testid="auto-unfollow"
+          />
           <Divider mx="calc(-1 * var(--mantine-spacing-md))" />
         </Box>
 

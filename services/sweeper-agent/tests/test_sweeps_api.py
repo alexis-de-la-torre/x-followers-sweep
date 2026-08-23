@@ -164,6 +164,33 @@ def test_accepts_a_dry_run_and_publishes_the_pinned_two_step_flow(
     }
 
 
+def test_accepts_auto_unfollow_as_a_pinned_three_step_flow(
+    client: TestClient,
+    publisher: RecordingPublisher,
+) -> None:
+    response = client.post(
+        "/api/v1/sweeps",
+        json={"id": SWEEP_ID, "mode": "auto-unfollow", "count": 3},
+    )
+
+    assert response.status_code == 202
+    command = publisher.messages[-1][1]
+    assert command["outcomeDeliveryContext"]["params"] == {
+        "mode": "auto-unfollow",
+        "count": 3,
+    }
+    assert [step["name"] for step in command["flow"]["steps"]] == [
+        "generate-candidates",
+        "review-handles",
+        "apply-unfollows",
+    ]
+    assert command["flow"]["adjacencyList"] == [
+        {"from": "generate-candidates", "to": "review-handles"},
+        {"from": "review-handles", "to": "apply-unfollows"},
+        {"from": "apply-unfollows", "to": "END"},
+    ]
+
+
 @pytest.mark.parametrize(
     "payload",
     [

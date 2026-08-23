@@ -83,6 +83,7 @@ class RecordingExecutor:
         self.generate_calls: list[int] = []
         self.review_calls: list[tuple[list[str], str]] = []
         self.unfollow_calls: list[str] = []
+        self.unfollows_calls: list[list[dict]] = []
 
     async def generate_candidates(self, count: int) -> list[str]:
         self.events.append("execute:generate")
@@ -100,6 +101,15 @@ class RecordingExecutor:
         self.events.append("execute:unfollow")
         self.unfollow_calls.append(handle)
         return {"handle": handle, "status": "APPLIED", "appliedAt": "2026-08-23T12:00:00+00:00"}
+
+    async def apply_unfollows(self, reviews: list[dict]) -> list[dict]:
+        self.events.append("execute:auto-unfollow")
+        self.unfollows_calls.append(reviews)
+        return [
+            {"handle": review["handle"], "status": "APPLIED", "appliedAt": "2026-08-23T12:00:00+00:00"}
+            for review in reviews
+            if review.get("decision") == "UNFOLLOW"
+        ]
 
 
 def run(coro) -> None:
@@ -185,6 +195,35 @@ def test_apply_unfollow_task_uses_the_authorized_handle_and_persists_its_result(
         }
     }
     assert broker_ack.acked == 1
+
+
+def test_auto_unfollow_task_applies_only_persisted_unfollow_reviews() -> None:
+    events: list[str] = []
+    publisher = RecordingPublisher(events)
+    executor = RecordingExecutor(events)
+    broker_ack = RecordingBrokerAck(events)
+    reviews = [
+        {"handle": "@keep", "decision": "KEEP", "reason": "Relevant"},
+        {"handle": "@remove", "decision": "UNFOLLOW", "reason": "Inactive"},
+    ]
+    handler = SweepTaskHandler(
+        publisher,
+        executor,
+        lambda _: {"params": {"mode": "auto-unfollow"}, "reviews": reviews},
+    )
+
+    run(handler.handle(new_task("apply-unfollows", "task-auto"), {}, broker_ack))
+
+    assert executor.unfollows_calls == [reviews]
+    assert publisher.messages[-1][1]["contextPatch"] == {
+        "unfollows": [
+            {
+                "handle": "@remove",
+                "status": "APPLIED",
+                "appliedAt": "2026-08-23T12:00:00+00:00",
+            }
+        ]
+    }
 
 
 def test_failed_work_reports_terminal_failure_before_broker_ack() -> None:

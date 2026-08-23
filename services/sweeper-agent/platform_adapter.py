@@ -43,6 +43,8 @@ class SweepExecutor(Protocol):
 
     async def apply_unfollow(self, handle: str) -> dict[str, Any]: ...
 
+    async def apply_unfollows(self, reviews: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
+
 
 ContextLoader = Callable[[str], Awaitable[dict[str, Any]] | dict[str, Any]]
 
@@ -67,6 +69,45 @@ class NewTask(BaseModel):
 def sweep_delivery_command(sweep_id: str, mode: str, count: int) -> dict[str, Any]:
     """Build the publisher-owned, delivery-pinned sweep flow."""
 
+    steps = [
+        {
+            "id": "generate-candidates",
+            "name": "generate-candidates",
+            "type": "task",
+            "fulfiller": {"id": FULFILLER_NAME, "name": FULFILLER_NAME},
+            "requirements": [],
+            "continueFlowOnFail": False,
+        },
+        {
+            "id": "review-handles",
+            "name": "review-handles",
+            "type": "task",
+            "fulfiller": {"id": FULFILLER_NAME, "name": FULFILLER_NAME},
+            "requirements": [],
+            "continueFlowOnFail": False,
+        },
+    ]
+    adjacency = [{"from": "generate-candidates", "to": "review-handles"}]
+    if mode == "auto-unfollow":
+        steps.append(
+            {
+                "id": "apply-unfollows",
+                "name": "apply-unfollows",
+                "type": "task",
+                "fulfiller": {"id": FULFILLER_NAME, "name": FULFILLER_NAME},
+                "requirements": [],
+                "continueFlowOnFail": False,
+            }
+        )
+        adjacency.extend(
+            [
+                {"from": "review-handles", "to": "apply-unfollows"},
+                {"from": "apply-unfollows", "to": "END"},
+            ]
+        )
+    else:
+        adjacency.append({"from": "review-handles", "to": "END"})
+
     return {
         "sourceType": "x-sweep-run",
         "sourceId": sweep_id,
@@ -80,28 +121,8 @@ def sweep_delivery_command(sweep_id: str, mode: str, count: int) -> dict[str, An
             "id": "default",
             "name": "sweep-run-default",
             "definitionVersion": "v1",
-            "steps": [
-                {
-                    "id": "generate-candidates",
-                    "name": "generate-candidates",
-                    "type": "task",
-                    "fulfiller": {"id": FULFILLER_NAME, "name": FULFILLER_NAME},
-                    "requirements": [],
-                    "continueFlowOnFail": False,
-                },
-                {
-                    "id": "review-handles",
-                    "name": "review-handles",
-                    "type": "task",
-                    "fulfiller": {"id": FULFILLER_NAME, "name": FULFILLER_NAME},
-                    "requirements": [],
-                    "continueFlowOnFail": False,
-                },
-            ],
-            "adjacencyList": [
-                {"from": "generate-candidates", "to": "review-handles"},
-                {"from": "review-handles", "to": "END"},
-            ],
+            "steps": steps,
+            "adjacencyList": adjacency,
         },
     }
 
@@ -267,6 +288,11 @@ class SweepTaskHandler:
             if not handle:
                 raise ValueError("MISSING_UNFOLLOW_HANDLE")
             return {"unfollow": await self.executor.apply_unfollow(handle)}
+        if task.outcome_task_name == "apply-unfollows":
+            reviews = context.get("reviews", [])
+            if not isinstance(reviews, list):
+                raise ValueError("MISSING_REVIEWS")
+            return {"unfollows": await self.executor.apply_unfollows(reviews)}
         raise ValueError(f"UNKNOWN_TASK: {task.outcome_task_name}")
 
     @staticmethod

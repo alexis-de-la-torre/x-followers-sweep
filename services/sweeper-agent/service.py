@@ -147,7 +147,7 @@ No markdown, no code fences, no explanations after the JSON. Just the array."""
 
 class ReviewRequest(BaseModel):
     handles: list[str]
-    mode: str = Field(default="dry-run", pattern="^dry-run$")
+    mode: str = Field(default="dry-run", pattern="^(dry-run|auto-unfollow)$")
 
 class ReviewResult(BaseModel):
     handle: str
@@ -168,7 +168,7 @@ class CandidateResponse(BaseModel):
 
 class SweepRequest(BaseModel):
     id: uuid.UUID
-    mode: str = Field(default="dry-run", pattern="^dry-run$")
+    mode: str = Field(default="dry-run", pattern="^(dry-run|auto-unfollow)$")
     count: int = Field(default=3, ge=1, le=30)
 
 class SweepAccepted(BaseModel):
@@ -454,6 +454,13 @@ class BrowserSweepExecutor:
             }
         finally:
             await ws.close()
+
+    async def apply_unfollows(self, reviews: list[dict]) -> list[dict]:
+        results = []
+        for review in reviews:
+            if review.get("decision") == "UNFOLLOW":
+                results.append(await self.apply_unfollow(str(review["handle"])))
+        return results
 
 
 @app.get("/health")

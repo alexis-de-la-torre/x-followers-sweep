@@ -12,6 +12,7 @@ export const PIPELINE = ["generate-candidates", "review-handles"];
 export const STEP_LABEL = {
   "generate-candidates": "Generate Candidates",
   "review-handles": "Review Handles",
+  "apply-unfollows": "Apply Unfollows",
 };
 
 export function stepStatus(step) {
@@ -32,6 +33,9 @@ export function toRun(d) {
     : [];
   const reviews = Array.isArray(ctx.reviews)
     ? ctx.reviews.filter((review) => review && typeof review.handle === "string")
+    : [];
+  const unfollows = Array.isArray(ctx.unfollows)
+    ? ctx.unfollows.filter((result) => result && typeof result.handle === "string")
     : [];
   const engineSteps = d.steps || [];
   const present = new Set(engineSteps.map((s) => s.taskName));
@@ -61,6 +65,7 @@ export function toRun(d) {
     errorDetail: failed?.detail ?? null,
     candidates,
     reviews,
+    unfollows,
     summary: {
       candidates: candidates.length,
       reviewed: reviews.length,
@@ -115,13 +120,32 @@ export async function fetchRuns() {
     if (!latestByDecision.has(key)) latestByDecision.set(key, application);
   }
   return (Array.isArray(runData) ? runData : []).map(toRun)
-    .map((run) => ({
-      ...run,
-      reviews: run.reviews.map((review) => ({
-        ...review,
-        application: latestByDecision.get(`${run.sourceId}:${review.handle.toLowerCase()}`) || null,
-      })),
-    }))
+    .map((run) => {
+      const autoStep = run.steps.find((step) => step.key === "apply-unfollows");
+      return {
+        ...run,
+        reviews: run.reviews.map((review) => {
+          const separatelyApplied = latestByDecision.get(
+            `${run.sourceId}:${review.handle.toLowerCase()}`,
+          );
+          const automaticResult = run.unfollows.find(
+            (result) => result.handle.toLowerCase() === review.handle.toLowerCase(),
+          );
+          const automaticApplication = automaticResult
+            ? { ...automaticResult, status: automaticResult.status || "APPLIED" }
+            : run.mode === "auto-unfollow" && review.decision === "UNFOLLOW"
+              ? {
+                  status: autoStep?.status === "FAILED" ? "FAILED" : "APPLYING",
+                  detail: autoStep?.detail || null,
+                }
+              : null;
+          return {
+            ...review,
+            application: separatelyApplied || automaticApplication,
+          };
+        }),
+      };
+    })
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
