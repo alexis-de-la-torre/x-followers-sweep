@@ -139,7 +139,10 @@ class BrowserTools:
         stalled = 0
         previous_size = 0
 
-        for _ in range(12):
+        # Large sweeps need enough passes to move through X's virtualized list.
+        # One pass per requested handle is deliberately conservative; collection
+        # still exits early as soon as the requested count is reached or the list stalls.
+        for _ in range(max(12, count)):
             raw = await self._evaluate(r"""
                 JSON.stringify(
                     [...document.querySelectorAll('[data-testid="UserCell"]')]

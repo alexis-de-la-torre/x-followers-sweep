@@ -46,3 +46,12 @@ def test_collects_exactly_the_requested_number_of_unique_real_handles() -> None:
     assert handles == ["@One", "@Two", "@Three"]
     assert browser.navigated == ["https://x.com/dlt_alx/following"]
     assert browser.scrolls == [900]
+
+
+def test_collection_can_continue_beyond_the_old_twelve_pass_limit() -> None:
+    browser = CandidateBrowser([[f"@user{i}"] for i in range(13)])
+
+    handles = asyncio.run(browser.collect_following_handles(13))
+
+    assert handles == [f"@user{i}" for i in range(13)]
+    assert len(browser.scrolls) == 12

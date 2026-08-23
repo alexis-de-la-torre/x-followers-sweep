@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 const STORAGE_KEY = "x-sweeper.settings";
 const DEFAULT_SETTINGS = { autoUnfollow: false, sweepCount: 3 };
-const ALLOWED_SWEEP_COUNTS = new Set([3, 10, 20, 30]);
+const ALLOWED_SWEEP_COUNTS = new Set([3, 10, 20, 30, 50, 100, 200, 500]);
 
 const SweepSettingsContext = createContext(null);
 
