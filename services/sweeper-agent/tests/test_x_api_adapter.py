@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 
@@ -110,6 +111,31 @@ def test_adapter_error_surfaces_category_without_raw_secret_like_body() -> None:
         assert "private upstream text" not in str(exc)
     finally:
         run(http.aclose())
+
+
+def test_account_probe_retries_adapter_startup_race(monkeypatch) -> None:
+    class StartsAfterTwoAttempts:
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        async def account(self) -> dict:
+            self.attempts += 1
+            if self.attempts < 3:
+                raise XApiAdapterError("x-api-adapter unavailable: ConnectError")
+            return {"id": "1478416609", "username": "dlt_alx"}
+
+    async def no_wait(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(service.asyncio, "sleep", no_wait)
+    adapter = StartsAfterTwoAttempts()
+    app = SimpleNamespace(state=SimpleNamespace())
+
+    run(service._load_x_account(app, adapter))
+
+    assert adapter.attempts == 3
+    assert app.state.x_account == {"id": "1478416609", "username": "dlt_alx"}
+    assert app.state.x_api_error is None
 
 
 def account(user_id: str, username: str, post: str) -> dict:

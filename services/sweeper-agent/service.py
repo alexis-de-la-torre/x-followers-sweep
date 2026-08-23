@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 
 from tools import BrowserTools
-from x_api_adapter import XApiAdapterClient
+from x_api_adapter import XApiAdapterClient, XApiAdapterError
 from platform_adapter import (
     DELIVER_TOPIC,
     GooglePubSubPublisher,
@@ -274,6 +274,27 @@ async def _decide_reviews(profiles: list[dict], handles: list[str]) -> list[dict
 
 # ── FastAPI app ────────────────────────────────────────────────────────────
 
+async def _load_x_account(app: FastAPI, adapter: XApiAdapterClient) -> None:
+    """Wait briefly for the adapter Service during a simultaneous rollout."""
+    attempts = 10
+    for attempt in range(1, attempts + 1):
+        try:
+            account = await adapter.account()
+            app.state.x_account = account
+            app.state.x_api_error = None
+            print(f"X API: authorized as @{account.get('username', 'unknown')}", flush=True)
+            return
+        except Exception as error:
+            app.state.x_api_error = str(error)
+            retryable = isinstance(error, XApiAdapterError) and str(error).startswith(
+                "x-api-adapter unavailable:"
+            )
+            if not retryable or attempt == attempts:
+                print(f"X API: {error}", flush=True)
+                return
+            await asyncio.sleep(1)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     platform_enabled = os.environ.get("SWEEPER_PLATFORM_ENABLED", "false").lower() in {"1", "true", "yes"}
@@ -303,13 +324,7 @@ async def lifespan(app: FastAPI):
             print(f"Outcome Engine fulfiller: {e}", flush=True)
     adapter = getattr(app.state, "x_api_adapter", None)
     if adapter is not None:
-        try:
-            account = await adapter.account()
-            app.state.x_account = account
-            print(f"X API: authorized as @{account.get('username', 'unknown')}", flush=True)
-        except Exception as e:
-            app.state.x_api_error = str(e)
-            print(f"X API: {e}", flush=True)
+        await _load_x_account(app, adapter)
     else:
         try:
             ws, psid = await _connect_chrome()
