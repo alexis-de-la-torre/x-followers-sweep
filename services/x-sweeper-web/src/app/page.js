@@ -155,6 +155,10 @@ function SweepResults({ run, onRequestUnfollow }) {
                 <Text size="xs" c="teal.7" fw={600}>
                   {review.handle} unfollowed
                 </Text>
+              ) : review.application?.status === "ALREADY_UNFOLLOWED" ? (
+                <Text size="xs" c="gray.7" fw={600}>
+                  {review.handle} was already not followed
+                </Text>
               ) : review.application?.status === "APPLYING" ? (
                 <Button size="compact-xs" variant="light" color="orange" loading disabled>
                   Applying unfollow
