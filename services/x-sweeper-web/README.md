@@ -27,6 +27,24 @@ npm install
 npm run test:e2e:swp-4
 ```
 
+The SWP-33 journey is also opt-in because it spends real X API resources and
+model work. Supply the exact deployed release so the emitted acceptance record
+is attributable to a staging version.
+
+```bash
+STAGING_RELEASE=xfs-abcdef0 npm run test:e2e:swp-33
+```
+
+To recheck the terminal UI and storage-cleared recovery without spending on a
+second X read, pass the previously recorded source identity:
+
+```bash
+npx cypress run \
+  --spec cypress/e2e/swp-33-50-account-review-staging.cy.js \
+  --config baseUrl=https://x-sweeper-web.s26.staging.adlt.dev \
+  --env RUN_SWP_33=true,STAGING_RELEASE=xfs-abcdef0,EXISTING_SWEEP_ID=00000000-0000-4000-8000-000000000000
+```
+
 ## Cypress against the local SWP-38 stack
 
 The SWP-38 spec is destructive and skipped unless explicitly enabled. It uses
