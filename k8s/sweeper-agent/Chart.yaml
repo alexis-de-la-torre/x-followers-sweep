@@ -1,6 +1,6 @@
 apiVersion: v2
 name: sweeper-agent
-description: X Following Sweeper — LLM-driven browser agent
+description: X Following Sweeper — Outcome Engine fulfiller and LLM reviewer
 type: application
 version: 0.1.0
 appVersion: "1.0.0"

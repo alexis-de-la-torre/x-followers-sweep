@@ -37,9 +37,14 @@ class BrokerAck(Protocol):
 
 
 class SweepExecutor(Protocol):
-    async def generate_candidates(self, count: int) -> list[str]: ...
+    async def generate_candidates(self, count: int) -> list[str] | dict[str, Any]: ...
 
-    async def review_handles(self, handles: list[str], mode: str) -> list[dict[str, Any]]: ...
+    async def review_handles(
+        self,
+        handles: list[str],
+        mode: str,
+        candidate_evidence: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]: ...
 
     async def apply_unfollow(self, handle: str) -> dict[str, Any]: ...
 
@@ -277,11 +282,21 @@ class SweepTaskHandler:
     async def _execute(self, task: NewTask, context: dict[str, Any]) -> dict[str, Any]:
         params = context.get("params", {})
         if task.outcome_task_name == "generate-candidates":
-            candidates = await self.executor.generate_candidates(int(params.get("count", 30)))
-            return {"candidates": candidates}
+            generated = await self.executor.generate_candidates(int(params.get("count", 30)))
+            if isinstance(generated, dict):
+                candidates = generated.get("candidates")
+                if not isinstance(candidates, list):
+                    raise ValueError("MISSING_CANDIDATES")
+                return generated
+            return {"candidates": generated}
         if task.outcome_task_name == "review-handles":
             candidates = context.get("candidates", [])
-            reviews = await self.executor.review_handles(candidates, str(params.get("mode", "dry-run")))
+            evidence = context.get("candidateEvidence")
+            reviews = await self.executor.review_handles(
+                candidates,
+                str(params.get("mode", "dry-run")),
+                evidence if isinstance(evidence, list) else None,
+            )
             return {"reviews": reviews}
         if task.outcome_task_name == "apply-unfollow":
             handle = str(context.get("handle", ""))

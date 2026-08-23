@@ -1,0 +1,19 @@
+# Scoped native build used by Cloud Build. Deployment/rendering remains in skaffold.yaml.
+apiVersion: skaffold/v4beta6
+kind: Config
+metadata:
+  name: x-api-adapter
+build:
+  tagPolicy:
+    envTemplate:
+      template: "{{.SHORT_SHA}}"
+  artifacts:
+    - image: us-central1-docker.pkg.dev/adlt-s26/adlt-s26-repo/x-api-adapter
+      context: services/x-api-adapter
+      buildpacks:
+        builder: paketobuildpacks/builder-jammy-tiny
+        trustBuilder: true
+        env:
+          - BP_NATIVE_IMAGE=true
+          - BP_JVM_VERSION=25
+          - BP_MAVEN_BUILD_ARGUMENTS=-Dmaven.test.skip=true -Pnative package

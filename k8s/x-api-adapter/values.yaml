@@ -1,0 +1,40 @@
+replicaCount: 1
+
+image:
+  repository: us-central1-docker.pkg.dev/adlt-s26/adlt-s26-repo/x-api-adapter
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+credentialsSecretName: x-api-adapter-env
+
+service:
+  type: ClusterIP
+  port: 8080
+  actuatorPort: 8081
+
+resources:
+  limits:
+    memory: 256Mi
+    cpu: "0.5"
+  requests:
+    memory: 96Mi
+    cpu: "0.01"
+
+livenessProbe:
+  httpGet:
+    path: /actuator/health/liveness
+    port: actuator
+  initialDelaySeconds: 15
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /actuator/health/readiness
+    port: actuator
+  initialDelaySeconds: 5
+  periodSeconds: 5
+
+env:
+  SERVER_PORT: "8080"
+  MANAGEMENT_PORT: "8081"
+  X_API_BASE_URL: "https://api.x.com"

@@ -92,7 +92,12 @@ class RecordingExecutor:
             raise RuntimeError("Chrome unavailable")
         return ["@one", "@two"]
 
-    async def review_handles(self, handles: list[str], mode: str) -> list[dict]:
+    async def review_handles(
+        self,
+        handles: list[str],
+        mode: str,
+        candidate_evidence: list[dict] | None = None,
+    ) -> list[dict]:
         self.events.append("execute:review")
         self.review_calls.append((handles, mode))
         return [{"handle": handle, "decision": "KEEP"} for handle in handles]
@@ -171,6 +176,55 @@ def test_review_task_reads_candidates_from_persisted_delivery_context() -> None:
             {"handle": "@two", "decision": "KEEP"},
         ]
     }
+
+
+def test_api_candidate_evidence_is_persisted_then_supplied_to_review() -> None:
+    evidence = [
+        {"xUserId": "42", "handle": "@one", "bio": "Useful", "latestPost": {"id": "9"}},
+        {"xUserId": "43", "handle": "@two", "bio": "Also useful", "latestPost": None},
+    ]
+
+    class StructuredExecutor(RecordingExecutor):
+        def __init__(self, events: list[str]) -> None:
+            super().__init__(events)
+            self.seen_evidence: list[dict] | None = None
+
+        async def generate_candidates(self, count: int) -> dict:
+            self.events.append("execute:generate")
+            return {
+                "candidates": ["@one", "@two"],
+                "candidateEvidence": evidence,
+                "xApi": {"returnedResources": 2, "upstreamRequests": 2},
+            }
+
+        async def review_handles(
+            self,
+            handles: list[str],
+            mode: str,
+            candidate_evidence: list[dict] | None = None,
+        ) -> list[dict]:
+            self.seen_evidence = candidate_evidence
+            return [{"handle": handle, "decision": "KEEP"} for handle in handles]
+
+    events: list[str] = []
+    publisher = RecordingPublisher(events)
+    executor = StructuredExecutor(events)
+    broker_ack = RecordingBrokerAck(events)
+    handler = SweepTaskHandler(publisher, executor, lambda _: {"params": {"count": 2}})
+
+    run(handler.handle(new_task("generate-candidates"), {}, broker_ack))
+    patch = publisher.messages[-1][1]["contextPatch"]
+    assert patch == {
+        "candidates": ["@one", "@two"],
+        "candidateEvidence": evidence,
+        "xApi": {"returnedResources": 2, "upstreamRequests": 2},
+    }
+
+    review_publisher = RecordingPublisher([])
+    review_handler = SweepTaskHandler(review_publisher, executor, lambda _: {"params": {}, **patch})
+    run(review_handler.handle(new_task("review-handles", "task-review"), {}, RecordingBrokerAck([])))
+
+    assert executor.seen_evidence == evidence
 
 
 def test_apply_unfollow_task_uses_the_authorized_handle_and_persists_its_result() -> None:

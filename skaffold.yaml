@@ -17,6 +17,15 @@ build:
       context: services/x-sweeper-web
       docker:
         dockerfile: Dockerfile
+    - image: us-central1-docker.pkg.dev/adlt-s26/adlt-s26-repo/x-api-adapter
+      context: services/x-api-adapter
+      buildpacks:
+        builder: paketobuildpacks/builder-jammy-tiny
+        trustBuilder: true
+        env:
+          - BP_NATIVE_IMAGE=true
+          - BP_JVM_VERSION=25
+          - BP_MAVEN_BUILD_ARGUMENTS=-Dmaven.test.skip=true -Pnative package
 deploy:
   helm:
     releases:
@@ -38,6 +47,12 @@ deploy:
           - k8s/x-sweeper-web/values.yaml
         setValueTemplates:
           image.tag: "{{.IMAGE_TAG_x_sweeper_web}}"
+      - name: x-api-adapter
+        chartPath: k8s/x-api-adapter
+        valuesFiles:
+          - k8s/x-api-adapter/values.yaml
+        setValueTemplates:
+          image.tag: "{{.IMAGE_TAG_x_api_adapter}}"
 profiles:
   - name: adlt-staging
     deploy:
@@ -55,6 +70,7 @@ profiles:
               env.PUBSUB_PREFIX: ""
               env.SWEEPER_SUBSCRIPTION: "OUTCOME.DELIVERY.FULLFILLER.NOTIFICATIONS.NEW-TASK-TO-BE-DONE.sweeper-agent"
               env.OUTCOME_ENGINE_URL: "http://outcome-engine:8080"
+              env.X_API_ADAPTER_URL: "http://x-api-adapter:8080"
               env.OPENROUTER_API_KEY: "sk-or-..."
           - name: chrome-vnc
             chartPath: k8s/chrome-vnc
@@ -65,6 +81,11 @@ profiles:
             chartPath: k8s/x-sweeper-web
             valuesFiles:
               - k8s/x-sweeper-web/values.yaml
+            namespace: adlt-staging
+          - name: x-api-adapter
+            chartPath: k8s/x-api-adapter
+            valuesFiles:
+              - k8s/x-api-adapter/values.yaml
             namespace: adlt-staging
   - name: adlt-prod
     deploy:
