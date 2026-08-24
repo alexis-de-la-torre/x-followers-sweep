@@ -30,6 +30,7 @@ import service  # noqa: E402
 
 SWEEP_ID = "0198d8f7-96cd-7a42-97a1-b359af601895"
 UNFOLLOW_ID = "0198d8f7-96cd-7a42-97a1-b359af601896"
+SELECTION_ID = "0198d8f7-96cd-7a42-97a1-b359af601897"
 
 
 class FakeWebSocket:
@@ -61,12 +62,34 @@ def client(publisher: RecordingPublisher) -> TestClient:
         "deliveryId": "delivery-1",
         "sourceId": sweep_id,
         "context": {
+            "xApi": {"source": {"id": "1478416609", "username": "dlt_alx"}},
             "reviews": [
                 {"handle": "@keep", "xUserId": "41", "decision": "KEEP", "reason": "Relevant"},
                 {"handle": "@reviewed", "xUserId": "42", "decision": "UNFOLLOW", "reason": "Inactive"},
+                {"handle": "@second", "xUserId": "43", "decision": "UNFOLLOW", "reason": "No longer useful"},
             ]
         },
     }
+    service.app.state.selection_loader = lambda selection_id: {
+        "deliveryId": "selection-delivery-1",
+        "sourceId": selection_id,
+        "status": "ALL_TASKS_COMPLETED",
+        "context": {
+            "params": {
+                "sweepId": SWEEP_ID,
+                "sweepDeliveryId": "delivery-1",
+                "sourceXUserId": "1478416609",
+                "targets": [
+                    {"handle": "@second", "xUserId": "43"},
+                    {"handle": "@reviewed", "xUserId": "42"},
+                ],
+            },
+        },
+    }
+    service.app.state.latest_selection_loader = lambda _sweep_id, _delivery_id: (
+        service.app.state.selection_loader(SELECTION_ID)
+    )
+    service.app.state.action_loader = lambda _action_id: None
     return TestClient(service.app)
 
 
@@ -102,6 +125,172 @@ def test_accepts_exactly_one_reviewed_unfollow_as_a_product_owned_delivery(
     assert command["flow"]["adjacencyList"] == [{"from": "apply-unfollow", "to": "END"}]
 
 
+def test_persists_one_ordered_reviewed_selection_without_an_x_action(
+    client: TestClient,
+    publisher: RecordingPublisher,
+) -> None:
+    targets = [
+        {"handle": "@second", "xUserId": "43"},
+        {"handle": "@reviewed", "xUserId": "42"},
+    ]
+
+    response = client.post(
+        f"/api/v1/sweeps/{SWEEP_ID}/selections",
+        json={"id": SELECTION_ID, "targets": targets},
+    )
+
+    assert response.status_code == 202
+    assert response.headers["location"] == f"/api/v1/selections/{SELECTION_ID}"
+    assert response.json() == {"id": SELECTION_ID, "status": "accepted"}
+    assert len(publisher.messages) == 1
+
+    topic, command, attributes = publisher.messages[0]
+    assert topic == "OUTCOME.DELIVERY.COMMANDS.DELIVER"
+    assert attributes is None
+    assert command["sourceType"] == "x-sweep-selection"
+    assert command["sourceId"] == SELECTION_ID
+    assert command["outcomeName"] == "sweep-selection"
+    assert command["outcomeDeliveryContext"] == {
+        "origin": "sweeper-agent",
+        "params": {
+            "sweepId": SWEEP_ID,
+            "sweepDeliveryId": "delivery-1",
+            "sourceXUserId": "1478416609",
+            "targets": targets,
+        },
+    }
+    assert [step["name"] for step in command["flow"]["steps"]] == ["save-selection"]
+    assert command["flow"]["adjacencyList"] == [{"from": "save-selection", "to": "END"}]
+
+
+def test_accepts_the_durable_selection_as_one_product_owned_x_action(
+    client: TestClient,
+    publisher: RecordingPublisher,
+) -> None:
+    targets = [
+        {"handle": "@second", "xUserId": "43"},
+        {"handle": "@reviewed", "xUserId": "42"},
+    ]
+
+    action_id = service.reviewed_action_id("delivery-1")
+    response = client.post(
+        f"/api/v1/sweeps/{SWEEP_ID}/unfollows",
+        json={"selectionId": SELECTION_ID},
+    )
+
+    assert response.status_code == 202
+    assert response.headers["location"] == f"/api/v1/unfollows/{action_id}"
+    assert response.json() == {"id": action_id, "status": "accepted"}
+    assert len(publisher.messages) == 1
+
+    topic, command, attributes = publisher.messages[0]
+    assert topic == "OUTCOME.DELIVERY.COMMANDS.DELIVER"
+    assert attributes is None
+    assert command["sourceType"] == "x-sweep-unfollow"
+    assert command["sourceId"] == action_id
+    assert command["outcomeName"] == "sweep-unfollow"
+    assert command["outcomeDeliveryContext"] == {
+        "origin": "sweeper-agent",
+        "params": {
+            "sweepId": SWEEP_ID,
+            "sweepDeliveryId": "delivery-1",
+            "selectionId": SELECTION_ID,
+            "selectionDeliveryId": "selection-delivery-1",
+            "sourceXUserId": "1478416609",
+            "targets": targets,
+        },
+    }
+    assert [step["name"] for step in command["flow"]["steps"]] == [
+        "apply-unfollow-0001",
+        "apply-unfollow-0002",
+    ]
+    assert command["flow"]["adjacencyList"] == [
+        {"from": "apply-unfollow-0001", "to": "apply-unfollow-0002"},
+        {"from": "apply-unfollow-0002", "to": "END"},
+    ]
+
+
+def test_an_older_selection_cannot_be_confirmed_after_a_new_version_is_saved(
+    client: TestClient,
+    publisher: RecordingPublisher,
+) -> None:
+    service.app.state.latest_selection_loader = lambda _sweep_id, _delivery_id: {
+        "deliveryId": "selection-delivery-2",
+        "sourceId": UNFOLLOW_ID,
+        "status": "ALL_TASKS_COMPLETED",
+        "context": {
+            "params": {
+                "sweepId": SWEEP_ID,
+                "sweepDeliveryId": "delivery-1",
+            },
+        },
+    }
+
+    response = client.post(
+        f"/api/v1/sweeps/{SWEEP_ID}/unfollows",
+        json={"selectionId": SELECTION_ID},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "selection has been replaced; review the visible set again"}
+    assert publisher.messages == []
+
+
+def test_repeated_confirmation_returns_the_existing_action_without_redispatch(
+    client: TestClient,
+    publisher: RecordingPublisher,
+) -> None:
+    action_id = service.reviewed_action_id("delivery-1")
+    service.app.state.action_loader = lambda requested_id: {
+        "deliveryId": "action-delivery-1",
+        "sourceId": requested_id,
+        "status": "ALL_TASKS_COMPLETED",
+        "context": {
+            "params": {
+                "sweepId": SWEEP_ID,
+                "sweepDeliveryId": "delivery-1",
+                "selectionId": SELECTION_ID,
+            },
+        },
+    }
+
+    response = client.post(
+        f"/api/v1/sweeps/{SWEEP_ID}/unfollows",
+        json={"selectionId": SELECTION_ID},
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {"id": action_id, "status": "accepted"}
+    assert publisher.messages == []
+
+
+def test_a_second_selection_cannot_replace_the_already_confirmed_action(
+    client: TestClient,
+    publisher: RecordingPublisher,
+) -> None:
+    service.app.state.action_loader = lambda requested_id: {
+        "deliveryId": "action-delivery-1",
+        "sourceId": requested_id,
+        "status": "ALL_TASKS_COMPLETED",
+        "context": {
+            "params": {
+                "sweepId": SWEEP_ID,
+                "sweepDeliveryId": "delivery-1",
+                "selectionId": UNFOLLOW_ID,
+            },
+        },
+    }
+
+    response = client.post(
+        f"/api/v1/sweeps/{SWEEP_ID}/unfollows",
+        json={"selectionId": SELECTION_ID},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "this sweep already has a confirmed selection"}
+    assert publisher.messages == []
+
+
 def test_applying_an_already_unfollowed_profile_returns_a_persisted_noop(monkeypatch) -> None:
     class AlreadyUnfollowedBrowser:
         def __init__(self, _ws, _psid: str) -> None:
@@ -129,32 +318,11 @@ def test_applying_an_already_unfollowed_profile_returns_a_persisted_noop(monkeyp
     }
 
 
-def test_auto_unfollow_persists_every_profile_result_and_continues_after_failure(monkeypatch) -> None:
-    executor = service.BrowserSweepExecutor()
-    attempted: list[str] = []
-
-    async def apply(handle: str, x_user_id: str) -> dict:
-        attempted.append(handle)
-        if handle == "@broken":
-            raise RuntimeError("X did not load the confirmation")
-        return {"handle": handle, "xUserId": x_user_id, "status": "APPLIED", "appliedAt": "now"}
-
-    monkeypatch.setattr(executor, "apply_unfollow", apply)
-    reviews = [
-        {"handle": "@first", "xUserId": "1", "decision": "UNFOLLOW"},
-        {"handle": "@keep", "xUserId": "2", "decision": "KEEP"},
-        {"handle": "@broken", "xUserId": "3", "decision": "UNFOLLOW"},
-        {"handle": "@last", "xUserId": "4", "decision": "UNFOLLOW"},
-    ]
-
-    results = asyncio.run(executor.apply_unfollows(reviews))
-
-    assert attempted == ["@first", "@broken", "@last"]
-    assert results == [
-        {"handle": "@first", "xUserId": "1", "status": "APPLIED", "appliedAt": "now"},
-        {"handle": "@broken", "xUserId": "3", "status": "FAILED", "detail": "X did not load the confirmation"},
-        {"handle": "@last", "xUserId": "4", "status": "APPLIED", "appliedAt": "now"},
-    ]
+def test_browser_batch_write_path_is_not_available() -> None:
+    with pytest.raises(RuntimeError, match="X_API_REQUIRED_FOR_APPROVED_SET"):
+        asyncio.run(service.BrowserSweepExecutor().apply_unfollows([
+            {"handle": "@reviewed", "xUserId": "42"},
+        ]))
 
 
 @pytest.mark.parametrize("handle", ["@keep", "@unknown"])
@@ -242,13 +410,13 @@ def test_accepts_a_dry_run_and_publishes_the_pinned_two_step_flow(
     }
 
 
-def test_accepts_auto_unfollow_as_a_pinned_three_step_flow(
+def test_accepts_auto_unfollow_as_a_review_only_two_step_flow(
     client: TestClient,
     publisher: RecordingPublisher,
 ) -> None:
     response = client.post(
         "/api/v1/sweeps",
-        json={"id": SWEEP_ID, "mode": "auto-unfollow", "count": 3},
+        json={"id": SWEEP_ID, "mode": "reviewed-auto-unfollow", "count": 3},
     )
 
     assert response.status_code == 202
@@ -260,13 +428,76 @@ def test_accepts_auto_unfollow_as_a_pinned_three_step_flow(
     assert [step["name"] for step in command["flow"]["steps"]] == [
         "generate-candidates",
         "review-handles",
-        "apply-unfollows",
     ]
     assert command["flow"]["adjacencyList"] == [
         {"from": "generate-candidates", "to": "review-handles"},
-        {"from": "review-handles", "to": "apply-unfollows"},
-        {"from": "apply-unfollows", "to": "END"},
+        {"from": "review-handles", "to": "END"},
     ]
+
+
+def test_rejects_an_approved_set_without_the_reviewed_x_source_identity(
+    client: TestClient,
+    publisher: RecordingPublisher,
+) -> None:
+    service.app.state.sweep_loader = lambda sweep_id: {
+        "deliveryId": "delivery-1",
+        "sourceId": sweep_id,
+        "context": {
+            "reviews": [
+                {"handle": "@reviewed", "xUserId": "42", "decision": "UNFOLLOW"},
+            ],
+        },
+    }
+
+    response = client.post(
+        f"/api/v1/sweeps/{SWEEP_ID}/selections",
+        json={"id": SELECTION_ID, "targets": [{"handle": "@reviewed", "xUserId": "42"}]},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "reviewed sweep has no X source identity"}
+    assert publisher.messages == []
+
+
+@pytest.mark.parametrize(
+    ("targets", "expected_status"),
+    [
+        ([], 422),
+        ([{"handle": "@reviewed", "xUserId": "42"}, {"handle": "@reviewed", "xUserId": "42"}], 422),
+        ([{"handle": "@keep", "xUserId": "41"}], 409),
+        ([{"handle": "@unknown", "xUserId": "99"}], 409),
+        ([{"handle": "@reviewed", "xUserId": "43"}], 409),
+    ],
+)
+def test_rejects_an_empty_duplicate_or_unreviewed_approved_set_before_publication(
+    client: TestClient,
+    publisher: RecordingPublisher,
+    targets: list[dict],
+    expected_status: int,
+) -> None:
+    response = client.post(
+        f"/api/v1/sweeps/{SWEEP_ID}/selections",
+        json={"id": SELECTION_ID, "targets": targets},
+    )
+
+    assert response.status_code == expected_status
+    assert publisher.messages == []
+
+
+def test_rejects_raw_targets_at_durable_selection_confirmation(
+    client: TestClient,
+    publisher: RecordingPublisher,
+) -> None:
+    response = client.post(
+        f"/api/v1/sweeps/{SWEEP_ID}/unfollows",
+        json={
+            "selectionId": SELECTION_ID,
+            "targets": [{"handle": "@reviewed", "xUserId": "42"}],
+        },
+    )
+
+    assert response.status_code == 422
+    assert publisher.messages == []
 
 
 @pytest.mark.parametrize(

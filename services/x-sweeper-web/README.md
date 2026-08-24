@@ -3,7 +3,11 @@
 Next.js (App Router) page showing the outcome-engine-backed sweep runs of the
 x-followers-sweep deployable unit: one timeline row per run with its steps
 (generate-candidates, review-handles), timing, and current state; click a row's
-status to open the full per-step timeline.
+status to open the full per-step timeline. The exact reviewed subset is first
+persisted as a harmless `sweep-selection` delivery. Only its visible
+confirmation creates a separate `sweep-unfollow` delivery. That delivery owns
+one sequential Outcome Engine task and one persisted result per approved
+account.
 
 - Step catalog mirrors the sweeper-agent's outcome-engine publications.
 - Per-run statuses/timestamps come from the outcome-engine API.
@@ -13,6 +17,8 @@ status to open the full per-step timeline.
 
 ```bash
 npm install
+NEXT_PUBLIC_OUTCOME_ENGINE_ADDR=http://127.0.0.1:8090 \
+NEXT_PUBLIC_SWEEPER_AGENT_ADDR=http://127.0.0.1:8020 \
 npm run dev        # http://localhost:3000
 ```
 
@@ -79,6 +85,65 @@ npx cypress run \
 If the X write completed but a later evidence assertion was interrupted, add
 `EXISTING_UNFOLLOW_ID=<source UUID>` to resume the post-action checks against
 that exact durable delivery without issuing a second relationship mutation.
+
+## Cypress against the local SWP-35 stack
+
+SWP-35 connects the local web and sweeper-agent to a local Outcome Engine and
+Pub/Sub emulator, with the staging Cloud SQL database and authenticated X API
+adapter. Its safe mode performs a real Auto-unfollow review, exact-account
+selection, deselection, and visible-set confirmation preview, but never submits
+the X action. The test clears browser storage and proves the saved included and
+excluded accounts restore from Outcome Engine. A fresh run spends real X API
+and model resources:
+
+```bash
+npm run test:e2e:swp-35:review-local -- --browser chrome
+```
+
+Two additional relationship-safe checks cover presentation boundaries without
+fixtures. The history check reads existing legacy Outcome Engine deliveries and
+never starts work. The fresh check starts one three-account review, then stops
+before saving a selection:
+
+```bash
+npm run test:e2e:swp-35:history-local -- --browser chrome
+npm run test:e2e:swp-35:fresh-local -- --browser chrome
+npm run test:unit
+```
+
+After an explicitly authorized action has completed, the read-only restoration
+spec verifies the action-bound selection, sequential X evidence, live
+relationships, cleared-browser restoration, and exactly one durable action. It
+never submits a sweep, selection, or action write:
+
+```bash
+CYPRESS_EXISTING_SWEEP_ID=<review-source-uuid> \
+CYPRESS_EXISTING_ACTION_ID=<action-source-uuid> \
+npm run test:e2e:swp-35:restore-local -- --browser chrome
+```
+
+Pass `CYPRESS_EXISTING_SWEEP_ID=<source UUID>` and the matching
+`CYPRESS_SWEEP_COUNT` to replay a persisted real review without another paid
+X/model run. The full journey additionally executes the approved set
+sequentially and restores every persisted result. It is skipped unless exact
+operator-approved stable IDs are supplied; prefix large IDs with `id:` and
+separate them with `|`. For the proved 100-account review, run:
+
+```bash
+CYPRESS_EXISTING_SWEEP_ID=e2cd4ad8-224e-471a-b868-53027101b6b1 \
+CYPRESS_SWEEP_COUNT=100 \
+CYPRESS_AUTHORIZED_APPROVED_X_USER_IDS='id:<approved-stable-id-1>|id:<approved-stable-id-2>' \
+npm run test:e2e:swp-35:local -- --browser chrome
+```
+
+Replace both placeholders only with accounts the connected X account owner has
+approved from that exact visible review. Never reuse IDs from another run or a
+confirmation preview.
+
+The Auto-unfollow switch sends the explicit `reviewed-auto-unfollow` request
+mode. Outcome Engine history continues to display the product mode as
+`auto-unfollow`; the request name makes clear that starting a review is not
+permission to change an X relationship.
 
 ## Build / run (standalone)
 

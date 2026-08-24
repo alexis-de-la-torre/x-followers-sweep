@@ -28,6 +28,8 @@ export default function SweepSettingsProvider({ children }) {
     } catch {
       // Browser storage can be unavailable; the safe defaults still work.
     }
+    // Hydrate browser-only settings after the server render to avoid a markup mismatch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setState({ settings, ready: true });
   }, []);
 

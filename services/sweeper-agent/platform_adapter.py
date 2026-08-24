@@ -46,9 +46,18 @@ class SweepExecutor(Protocol):
         candidate_evidence: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]: ...
 
-    async def apply_unfollow(self, handle: str, x_user_id: str) -> dict[str, Any]: ...
+    async def apply_unfollow(
+        self,
+        handle: str,
+        x_user_id: str,
+        source_x_user_id: str | None = None,
+    ) -> dict[str, Any]: ...
 
-    async def apply_unfollows(self, reviews: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
+    async def apply_unfollows(
+        self,
+        targets: list[dict[str, Any]],
+        source_x_user_id: str,
+    ) -> list[dict[str, Any]]: ...
 
 
 ContextLoader = Callable[[str], Awaitable[dict[str, Any]] | dict[str, Any]]
@@ -92,26 +101,13 @@ def sweep_delivery_command(sweep_id: str, mode: str, count: int) -> dict[str, An
             "continueFlowOnFail": False,
         },
     ]
-    adjacency = [{"from": "generate-candidates", "to": "review-handles"}]
-    if mode == "auto-unfollow":
-        steps.append(
-            {
-                "id": "apply-unfollows",
-                "name": "apply-unfollows",
-                "type": "task",
-                "fulfiller": {"id": FULFILLER_NAME, "name": FULFILLER_NAME},
-                "requirements": [],
-                "continueFlowOnFail": False,
-            }
-        )
-        adjacency.extend(
-            [
-                {"from": "review-handles", "to": "apply-unfollows"},
-                {"from": "apply-unfollows", "to": "END"},
-            ]
-        )
-    else:
-        adjacency.append({"from": "review-handles", "to": "END"})
+    # Auto-unfollow is a reviewed product mode, not permission to mutate. Both
+    # modes stop after review; a later user-confirmed action delivery owns the
+    # exact approved subset and every relationship write.
+    adjacency = [
+        {"from": "generate-candidates", "to": "review-handles"},
+        {"from": "review-handles", "to": "END"},
+    ]
 
     return {
         "sourceType": "x-sweep-run",
@@ -170,6 +166,105 @@ def unfollow_delivery_command(
                 }
             ],
             "adjacencyList": [{"from": "apply-unfollow", "to": "END"}],
+        },
+    }
+
+
+def unfollow_set_delivery_command(
+    unfollow_id: str,
+    sweep_id: str,
+    sweep_delivery_id: str,
+    selection_id: str,
+    selection_delivery_id: str,
+    source_x_user_id: str,
+    targets: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Build one sequential, progress-visible step per confirmed target."""
+
+    step_names = [f"apply-unfollow-{index:04d}" for index in range(1, len(targets) + 1)]
+    steps = [
+        {
+            "id": name,
+            "name": name,
+            "type": "task",
+            "fulfiller": {"id": FULFILLER_NAME, "name": FULFILLER_NAME},
+            "requirements": [],
+            "continueFlowOnFail": False,
+        }
+        for name in step_names
+    ]
+    adjacency = [
+        {
+            "from": name,
+            "to": step_names[index + 1] if index + 1 < len(step_names) else "END",
+        }
+        for index, name in enumerate(step_names)
+    ]
+
+    return {
+        "sourceType": "x-sweep-unfollow",
+        "sourceId": unfollow_id,
+        "prospectId": None,
+        "outcomeName": "sweep-unfollow",
+        "outcomeDeliveryContext": {
+            "origin": FULFILLER_NAME,
+            "params": {
+                "sweepId": sweep_id,
+                "sweepDeliveryId": sweep_delivery_id,
+                "selectionId": selection_id,
+                "selectionDeliveryId": selection_delivery_id,
+                "sourceXUserId": source_x_user_id,
+                "targets": targets,
+            },
+        },
+        "flow": {
+            "id": "default",
+            "name": "sweep-unfollow-set-default",
+            "definitionVersion": "v1",
+            "steps": steps,
+            "adjacencyList": adjacency,
+        },
+    }
+
+
+def selection_delivery_command(
+    selection_id: str,
+    sweep_id: str,
+    sweep_delivery_id: str,
+    source_x_user_id: str,
+    targets: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Persist one immutable reviewed selection without authorizing an X write."""
+
+    return {
+        "sourceType": "x-sweep-selection",
+        "sourceId": selection_id,
+        "prospectId": None,
+        "outcomeName": "sweep-selection",
+        "outcomeDeliveryContext": {
+            "origin": FULFILLER_NAME,
+            "params": {
+                "sweepId": sweep_id,
+                "sweepDeliveryId": sweep_delivery_id,
+                "sourceXUserId": source_x_user_id,
+                "targets": targets,
+            },
+        },
+        "flow": {
+            "id": "default",
+            "name": "sweep-selection-default",
+            "definitionVersion": "v1",
+            "steps": [
+                {
+                    "id": "save-selection",
+                    "name": "save-selection",
+                    "type": "task",
+                    "fulfiller": {"id": FULFILLER_NAME, "name": FULFILLER_NAME},
+                    "requirements": [],
+                    "continueFlowOnFail": False,
+                }
+            ],
+            "adjacencyList": [{"from": "save-selection", "to": "END"}],
         },
     }
 
@@ -310,11 +405,71 @@ class SweepTaskHandler:
             if not x_user_id:
                 raise ValueError("MISSING_UNFOLLOW_X_USER_ID")
             return {"unfollow": await self.executor.apply_unfollow(handle, x_user_id)}
+        if task.outcome_task_name == "save-selection":
+            targets = params.get("targets")
+            source_x_user_id = str(params.get("sourceXUserId") or "")
+            if not isinstance(targets, list) or not targets:
+                raise ValueError("MISSING_REVIEWED_SELECTION_TARGETS")
+            if not source_x_user_id:
+                raise ValueError("MISSING_REVIEWED_X_SOURCE_ID")
+            for target in targets:
+                if not isinstance(target, dict) or not target.get("handle") or not target.get("xUserId"):
+                    raise ValueError("INVALID_REVIEWED_SELECTION_TARGET")
+            return {
+                "selection": {
+                    "targets": targets,
+                    "sourceXUserId": source_x_user_id,
+                    "status": "SAVED",
+                },
+            }
+        if task.outcome_task_name.startswith("apply-unfollow-"):
+            targets = params.get("targets")
+            source_x_user_id = str(params.get("sourceXUserId") or "")
+            if not isinstance(targets, list) or not targets:
+                raise ValueError("MISSING_APPROVED_UNFOLLOW_TARGETS")
+            if not source_x_user_id:
+                raise ValueError("MISSING_REVIEWED_X_SOURCE_ID")
+            try:
+                sequence = int(task.outcome_task_name.removeprefix("apply-unfollow-"))
+                target = targets[sequence - 1]
+            except (TypeError, ValueError, IndexError) as exc:
+                raise ValueError("INVALID_APPROVED_UNFOLLOW_SEQUENCE") from exc
+            if (
+                sequence < 1
+                or not isinstance(target, dict)
+                or not target.get("handle")
+                or not target.get("xUserId")
+            ):
+                raise ValueError("INVALID_APPROVED_UNFOLLOW_TARGET")
+            results = await self.executor.apply_unfollows([target], source_x_user_id)
+            if not isinstance(results, list) or len(results) != 1 or not isinstance(results[0], dict):
+                raise ValueError("MISSING_APPROVED_UNFOLLOW_RESULT")
+            result = {
+                **results[0],
+                "sequence": sequence,
+                "completedAt": results[0].get("completedAt")
+                or datetime.now(timezone.utc).isoformat(),
+            }
+            if str(result.get("xUserId") or "") != str(target["xUserId"]):
+                raise ValueError("UNFOLLOW_RESULT_TARGET_MISMATCH")
+            return {
+                "unfollowResults": {
+                    str(target["xUserId"]): result,
+                },
+            }
         if task.outcome_task_name == "apply-unfollows":
-            reviews = context.get("reviews", [])
-            if not isinstance(reviews, list):
-                raise ValueError("MISSING_REVIEWS")
-            return {"unfollows": await self.executor.apply_unfollows(reviews)}
+            targets = params.get("targets")
+            if not isinstance(targets, list) or not targets:
+                raise ValueError("MISSING_APPROVED_UNFOLLOW_TARGETS")
+            source_x_user_id = str(params.get("sourceXUserId") or "")
+            if not source_x_user_id:
+                raise ValueError("MISSING_REVIEWED_X_SOURCE_ID")
+            for target in targets:
+                if not isinstance(target, dict) or not target.get("handle") or not target.get("xUserId"):
+                    raise ValueError("INVALID_APPROVED_UNFOLLOW_TARGET")
+            return {
+                "unfollows": await self.executor.apply_unfollows(targets, source_x_user_id),
+            }
         raise ValueError(f"UNKNOWN_TASK: {task.outcome_task_name}")
 
     @staticmethod
@@ -408,31 +563,114 @@ class OutcomeEngineContextLoader:
         return context
 
 
-class OutcomeEngineSweepLoader:
-    """Resolve a persisted sweep and its context from its product-owned identity."""
+class OutcomeEngineSourceLoader:
+    """Resolve any persisted delivery and context from its product-owned identity."""
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, source_type: str) -> None:
         self.base_url = base_url.rstrip("/")
+        self.source_type = source_type
 
-    async def __call__(self, sweep_id: str) -> dict[str, Any]:
+    async def __call__(self, source_id: str) -> dict[str, Any]:
         import httpx
 
-        state_url = f"{self.base_url}/api/v1/outcome-deliveries/by-source/x-sweep-run/{sweep_id}"
+        state_url = (
+            f"{self.base_url}/api/v1/outcome-deliveries/by-source/"
+            f"{self.source_type}/{source_id}"
+        )
         async with httpx.AsyncClient(timeout=20) as client:
             state_response = await client.get(state_url)
             state_response.raise_for_status()
             state = state_response.json()
             delivery_id = str(state.get("deliveryId", "")) if isinstance(state, dict) else ""
             if not delivery_id:
-                raise ValueError("Outcome Engine returned a sweep without a delivery id")
+                raise ValueError("Outcome Engine returned a source without a delivery id")
             context_response = await client.get(
                 f"{self.base_url}/api/v1/outcome-deliveries/{delivery_id}/context"
             )
             context_response.raise_for_status()
             context = context_response.json()
         if not isinstance(context, dict):
-            raise ValueError("Outcome Engine returned a non-object sweep context")
-        return {"deliveryId": delivery_id, "sourceId": sweep_id, "context": context}
+            raise ValueError("Outcome Engine returned a non-object delivery context")
+        return {
+            "deliveryId": delivery_id,
+            "sourceId": source_id,
+            "status": state.get("status") if isinstance(state, dict) else None,
+            "context": context,
+        }
+
+    async def find(self, source_id: str) -> dict[str, Any] | None:
+        """Return a source delivery when it exists, keeping 404 as normal absence."""
+        import httpx
+
+        try:
+            return await self(source_id)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise
+
+
+class OutcomeEngineSweepLoader(OutcomeEngineSourceLoader):
+    """Resolve a persisted sweep and its context from its product-owned identity."""
+
+    def __init__(self, base_url: str) -> None:
+        super().__init__(base_url, "x-sweep-run")
+
+
+class OutcomeEngineLatestSelectionLoader:
+    """Resolve the newest completed selection version for one sweep delivery."""
+
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url.rstrip("/")
+
+    async def __call__(self, sweep_id: str, sweep_delivery_id: str) -> dict[str, Any] | None:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.get(
+                f"{self.base_url}/api/v1/outcome-deliveries",
+                params={"outcomeName": "sweep-selection", "limit": 500},
+            )
+            response.raise_for_status()
+            deliveries = response.json()
+        if not isinstance(deliveries, list):
+            raise ValueError("Outcome Engine returned a non-list selection history")
+
+        matches = []
+        for delivery in deliveries:
+            if not isinstance(delivery, dict) or delivery.get("status") != "ALL_TASKS_COMPLETED":
+                continue
+            context = delivery.get("context")
+            if isinstance(context, str):
+                try:
+                    context = json.loads(context)
+                except json.JSONDecodeError:
+                    continue
+            if not isinstance(context, dict):
+                continue
+            selection = context.get("selection")
+            if not isinstance(selection, dict) or selection.get("status") != "SAVED":
+                continue
+            params = context.get("params")
+            if not isinstance(params, dict):
+                continue
+            if (
+                str(params.get("sweepId") or "") != sweep_id
+                or str(params.get("sweepDeliveryId") or "") != sweep_delivery_id
+            ):
+                continue
+            matches.append({**delivery, "context": context})
+        if not matches:
+            return None
+
+        def sort_key(delivery: dict[str, Any]) -> tuple[str, int]:
+            delivery_id = str(delivery.get("deliveryId") or "")
+            return (
+                str(delivery.get("createdAt") or ""),
+                int(delivery_id) if delivery_id.isdigit() else -1,
+            )
+
+        return max(matches, key=sort_key)
 
 
 class PubSubRuntime:
