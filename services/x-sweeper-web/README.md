@@ -33,6 +33,21 @@ npm install
 npm run test:e2e:swp-4
 ```
 
+SWP-41 proves the smallest Chrome-free release vertical. It queries the real
+`adlt-staging` namespace through the current `kubectl` context, verifies that
+Chrome workloads/services and `BROWSER_WS` are absent while the rollback PVC
+remains bound, starts one real three-account Dry run, clears browser storage,
+and restores the same persisted results. It performs no relationship action.
+
+```bash
+gcloud container clusters get-credentials adlt-s26-cluster \
+  --zone us-central1-a --project adlt-s26
+STAGING_RELEASE=xfs-abcdef0 npm run test:e2e:swp-41
+```
+
+Use `CYPRESS_EXISTING_SWEEP_ID=<source UUID>` to repeat only the restoration
+proof without spending on another X/model review.
+
 The SWP-33 journey is also opt-in because it spends real X API resources and
 model work. Supply the exact deployed release so the emitted acceptance record
 is attributable to a staging version.

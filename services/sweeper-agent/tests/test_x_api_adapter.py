@@ -85,7 +85,7 @@ def test_api_executor_reviews_persisted_evidence_without_a_browser(monkeypatch) 
         ]
 
     monkeypatch.setattr(service, "_decide_reviews", decide)
-    executor = service.ApiSweepExecutor(adapter=object(), write_executor=object())
+    executor = service.ApiSweepExecutor(adapter=object())
 
     reviews = run(executor.review_handles(["@one", "@two"], "dry-run", evidence))
 
@@ -128,12 +128,8 @@ def test_api_executor_applies_one_stable_id_with_fresh_before_and_after_reads() 
                 "upstreamRequests": 2,
             }
 
-    class BrowserMustNotRun:
-        async def apply_unfollow(self, _handle: str, _x_user_id: str) -> dict:
-            raise AssertionError("Chrome write path must not run")
-
     adapter = RelationshipAdapter()
-    executor = service.ApiSweepExecutor(adapter=adapter, write_executor=BrowserMustNotRun())
+    executor = service.ApiSweepExecutor(adapter=adapter)
 
     result = run(executor.apply_unfollow("@reviewed", "42", "1478416609"))
 
@@ -174,15 +170,8 @@ def test_api_executor_applies_an_approved_set_sequentially_without_browser_fallb
                 "following": False,
             }
 
-    class BrowserMustNotRun:
-        async def apply_unfollow(self, _handle: str, _x_user_id: str) -> dict:
-            raise AssertionError("Chrome write path must not run")
-
-        async def apply_unfollows(self, _targets: list[dict]) -> list[dict]:
-            raise AssertionError("Chrome batch write path must not run")
-
     adapter = OrderedRelationshipAdapter()
-    executor = service.ApiSweepExecutor(adapter=adapter, write_executor=BrowserMustNotRun())
+    executor = service.ApiSweepExecutor(adapter=adapter)
     targets = [
         {"handle": "@first", "xUserId": "42"},
         {"handle": "@broken", "xUserId": "43"},
@@ -223,7 +212,7 @@ def test_api_executor_persists_an_already_unfollowed_target_as_a_terminal_noop()
         async def unfollow(self, _x_user_id: str) -> dict:
             raise AssertionError("an already-unfollowed target must not be mutated")
 
-    executor = service.ApiSweepExecutor(adapter=AlreadyGoneAdapter(), write_executor=object())
+    executor = service.ApiSweepExecutor(adapter=AlreadyGoneAdapter())
 
     result = run(executor.apply_unfollow("@gone", "42", "1478416609"))
 
@@ -250,7 +239,7 @@ def test_api_executor_refuses_to_write_from_a_different_authenticated_source() -
             return {"source": {"id": "999"}, "targetId": x_user_id, "following": False}
 
     adapter = DifferentSourceAdapter()
-    executor = service.ApiSweepExecutor(adapter=adapter, write_executor=object())
+    executor = service.ApiSweepExecutor(adapter=adapter)
 
     results = run(executor.apply_unfollows(
         [{"handle": "@reviewed", "xUserId": "42"}],
@@ -293,7 +282,7 @@ def test_api_executor_retains_current_handle_and_available_evidence_when_after_r
                 "following": False,
             }
 
-    executor = service.ApiSweepExecutor(adapter=FailingAfterReadAdapter(), write_executor=object())
+    executor = service.ApiSweepExecutor(adapter=FailingAfterReadAdapter())
 
     results = run(executor.apply_unfollows(
         [{"handle": "@review_handle", "xUserId": "42"}],

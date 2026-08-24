@@ -325,6 +325,21 @@ def test_browser_batch_write_path_is_not_available() -> None:
         ]))
 
 
+def test_health_reports_the_x_boundary_without_browser_readiness() -> None:
+    service.app.state.x_api_adapter = None
+    service.app.state.platform_error = "X_API_ADAPTER_URL is required"
+
+    status = asyncio.run(service.health())
+
+    assert "chrome" not in status
+    assert status["xApi"] == {
+        "configured": False,
+        "writeConfigured": False,
+        "account": None,
+        "error": "X_API_ADAPTER_URL is required",
+    }
+
+
 @pytest.mark.parametrize("handle", ["@keep", "@unknown"])
 def test_rejects_a_handle_without_a_persisted_unfollow_decision(
     client: TestClient,

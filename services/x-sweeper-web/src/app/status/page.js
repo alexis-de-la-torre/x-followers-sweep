@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Box, Container, Group, Stack, Text, Card, Skeleton, Divider, Badge } from "@mantine/core";
-import { IconBrandTwitterFilled, IconHealthRecognition, IconBrowser, IconCpu, IconPlugConnected } from "@tabler/icons-react";
+import { IconBrandTwitterFilled, IconHealthRecognition, IconCpu, IconPlugConnected } from "@tabler/icons-react";
 import { fetchAgentStatus } from "@/lib/engine";
 
 export default function StatusPage() {
@@ -21,6 +21,7 @@ export default function StatusPage() {
   }, []);
 
   const ok = status?.service === "ok";
+  const xApiReady = status?.xApi?.configured === true && !status?.xApi?.error;
 
   return (
     <Box bg="gray.2" mih="calc(100dvh - var(--app-shell-header-height, 46px) - var(--app-shell-footer-height, 74px))">
@@ -60,14 +61,17 @@ export default function StatusPage() {
             <Card withBorder>
               <Stack gap="sm">
                 <Group gap="sm" wrap="nowrap" align="center">
-                  <IconBrowser size={20} color="var(--mantine-color-gray-6)" />
-                  <Text fw={600} size="sm">Chrome CDP</Text>
-                  <Badge color={status?.chrome === "ok" ? "teal" : "red"} variant="light" size="sm">
-                    {status?.chrome === "ok" ? "Connected" : "Error"}
+                  <IconBrandTwitterFilled size={20} color="var(--mantine-color-gray-6)" />
+                  <Box style={{ flex: 1 }}>
+                    <Text fw={600} size="sm">X API</Text>
+                    <Text size="xs" c="dimmed">{status?.xApi?.account || "No authorized account"}</Text>
+                  </Box>
+                  <Badge color={xApiReady ? "teal" : "red"} variant="light" size="sm">
+                    {xApiReady ? "Connected" : "Error"}
                   </Badge>
                 </Group>
-                {status?.chrome !== "ok" && status?.chrome && (
-                  <Text size="xs" c="red">{status.chrome}</Text>
+                {!xApiReady && status?.xApi?.error && (
+                  <Text size="xs" c="red">{status.xApi.error}</Text>
                 )}
               </Stack>
             </Card>

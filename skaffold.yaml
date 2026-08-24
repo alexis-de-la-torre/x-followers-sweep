@@ -8,10 +8,6 @@ build:
       context: .
       docker:
         dockerfile: services/sweeper-agent/Dockerfile
-    - image: us-central1-docker.pkg.dev/adlt-s26/adlt-s26-repo/chrome-vnc
-      context: .
-      docker:
-        dockerfile: services/chrome-vnc/Dockerfile
     # X Sweeper web frontend — Next.js standalone server (see services/x-sweeper-web/README.md).
     - image: us-central1-docker.pkg.dev/adlt-s26/adlt-s26-repo/x-sweeper-web
       context: services/x-sweeper-web
@@ -35,12 +31,6 @@ deploy:
           - k8s/sweeper-agent/values.yaml
         setValues:
           image.tag: "{{.IMAGE_TAG_sweeper_agent}}"
-      - name: chrome-vnc
-        chartPath: k8s/chrome-vnc
-        valuesFiles:
-          - k8s/chrome-vnc/values.yaml
-        setValues:
-          image.tag: "{{.IMAGE_TAG_chrome_vnc}}"
       - name: x-sweeper-web
         chartPath: k8s/x-sweeper-web
         valuesFiles:
@@ -72,11 +62,7 @@ profiles:
               env.OUTCOME_ENGINE_URL: "http://outcome-engine:8080"
               env.X_API_ADAPTER_URL: "http://x-api-adapter:8080"
               env.OPENROUTER_API_KEY: "sk-or-..."
-          - name: chrome-vnc
-            chartPath: k8s/chrome-vnc
-            valuesFiles:
-              - k8s/chrome-vnc/values.yaml
-            namespace: adlt-staging
+              runtimeCleanup.enabled: true
           - name: x-sweeper-web
             chartPath: k8s/x-sweeper-web
             valuesFiles:
@@ -99,8 +85,3 @@ profiles:
             setValueTemplates:
               serviceAccount.gcpServiceAccount: "sweeper-agent@adlt-s26.iam.gserviceaccount.com"
               env.OPENROUTER_API_KEY: "sk-or-..."
-          - name: chrome-vnc
-            chartPath: k8s/chrome-vnc
-            valuesFiles:
-              - k8s/chrome-vnc/values.yaml
-            namespace: adlt-prod

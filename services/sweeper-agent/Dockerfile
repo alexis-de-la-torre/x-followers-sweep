@@ -12,7 +12,7 @@ WORKDIR /app
 COPY services/sweeper-agent/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY services/sweeper-agent/service.py services/sweeper-agent/tools.py services/sweeper-agent/platform_adapter.py services/sweeper-agent/x_api_adapter.py ./
+COPY services/sweeper-agent/service.py services/sweeper-agent/tools.py services/sweeper-agent/platform_adapter.py services/sweeper-agent/x_api_adapter.py services/sweeper-agent/cleanup_chrome_runtime.py ./
 COPY services/sweeper-agent/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
