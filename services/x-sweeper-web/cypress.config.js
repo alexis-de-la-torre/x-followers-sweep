@@ -5,6 +5,22 @@ function kubectlJson(args) {
   return JSON.parse(execFileSync("kubectl", args, { encoding: "utf8" }));
 }
 
+function sweeperAgentPods() {
+  const pods = kubectlJson([
+    "-n", "adlt-staging", "get", "pods",
+    "-l", "app.kubernetes.io/name=sweeper-agent",
+    "-o", "json",
+  ]);
+  return (pods.items || []).map((pod) => ({
+    name: pod.metadata?.name,
+    uid: pod.metadata?.uid,
+    createdAt: pod.metadata?.creationTimestamp,
+    deleting: Boolean(pod.metadata?.deletionTimestamp),
+    phase: pod.status?.phase,
+    ready: pod.status?.containerStatuses?.every((container) => container.ready) || false,
+  }));
+}
+
 export default defineConfig({
   e2e: {
     baseUrl: "http://localhost:3000",
@@ -51,7 +67,25 @@ export default defineConfig({
               capacity: profile.status?.capacity?.storage,
             },
             agentConfig: agentConfig.data || {},
+            agentPods: sweeperAgentPods(),
           };
+        },
+        stagingRestartSweeperAgent() {
+          const before = sweeperAgentPods();
+          execFileSync(
+            "kubectl",
+            ["-n", "adlt-staging", "rollout", "restart", "deployment/sweeper-agent"],
+            { encoding: "utf8" },
+          );
+          execFileSync(
+            "kubectl",
+            [
+              "-n", "adlt-staging", "rollout", "status", "deployment/sweeper-agent",
+              "--timeout=180s",
+            ],
+            { encoding: "utf8" },
+          );
+          return { before, after: sweeperAgentPods() };
         },
       });
     },
