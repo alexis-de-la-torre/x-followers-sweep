@@ -19,7 +19,8 @@ describe("X Sweeper Web", () => {
       cy.contains("Agent information").should("be.visible");
       cy.contains("Agent").should("be.visible");
       cy.contains(/Online|Unreachable|Checking/).should("be.visible");
-      cy.contains("Chrome").should("be.visible");
+      cy.contains("X API").should("be.visible");
+      cy.contains("X account").should("be.visible");
       cy.contains("Model").should("be.visible");
     });
   });
@@ -100,7 +101,7 @@ describe("Agent Status Page", () => {
   it("shows service status cards", () => {
     cy.visit("/status");
     cy.contains("Sweeper Agent").should("be.visible");
-    cy.contains("Chrome CDP").should("be.visible");
+    cy.contains("X API").should("be.visible");
     cy.contains("Model").should("be.visible");
     cy.contains("OpenRouter").should("be.visible");
   });

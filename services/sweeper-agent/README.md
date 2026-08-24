@@ -8,16 +8,17 @@ Required local endpoints:
 
 - Pub/Sub emulator: `127.0.0.1:8085`
 - Outcome Engine: `127.0.0.1:8090`
-- Authenticated Chrome CDP fallback: `127.0.0.1:9222`
+- X API adapter: `127.0.0.1:8030` or the authenticated staging adapter
 - Sweeper agent: `127.0.0.1:8020`
 - X Sweeper web: `127.0.0.1:3000`
 
 ## Official X API reviewed flow
 
-When `X_API_ADAPTER_URL` is set, Outcome Engine's `generate-candidates` and
-`review-handles` tasks use the internal Spring Native `x-api-adapter` instead
-of Chrome. The adapter returns stable X user IDs and structured evidence; the
-agent persists both in the delivery context before the model review starts.
+When the Outcome Engine fulfiller is enabled, `X_API_ADAPTER_URL` is required.
+Its `generate-candidates`, `review-handles`, and approved relationship actions
+use the internal Spring Native `x-api-adapter`. The adapter returns stable X
+user IDs and structured evidence; the agent persists both in the delivery
+context before the model review starts.
 
 Run the adapter locally on port 8030 with the four OAuth 1.0a user-context
 values supplied as environment variables, or point the local agent at the
@@ -43,8 +44,8 @@ exact ordered set selected by the user as an immutable `sweep-selection`
 delivery; its `save-selection` task performs no relationship action. The later
 confirmation names only that selection ID. A deterministic, separate Outcome
 Engine delivery applies every approved stable X user ID sequentially through
-the official X API and persists every terminal result in the same order. Chrome
-is not a fallback for an approved set.
+the official X API and persists every terminal result in the same order. The
+deployed fulfiller does not select or probe a Chrome fallback.
 
 Initialize the emulator after it starts:
 
@@ -52,19 +53,6 @@ Initialize the emulator after it starts:
 PUBSUB_EMULATOR_HOST=127.0.0.1:8085 \
 GOOGLE_CLOUD_PROJECT=adlt-local \
 python3 scripts/init_pubsub_emulator.py
-```
-
-Run the agent with:
-
-```bash
-PUBSUB_EMULATOR_HOST=127.0.0.1:8085 \
-GOOGLE_CLOUD_PROJECT=adlt-local \
-SWEEPER_PLATFORM_ENABLED=true \
-SWEEPER_SUBSCRIPTION=OUTCOME.DELIVERY.FULLFILLER.NOTIFICATIONS.NEW-TASK-TO-BE-DONE.sweeper-agent \
-OUTCOME_ENGINE_URL=http://127.0.0.1:8090 \
-BROWSER_WS=http://127.0.0.1:9222/json/version \
-SCREENSHOT_DIR=/tmp/x-sweeper-agent-screenshots \
-uvicorn service:app --host 127.0.0.1 --port 8020
 ```
 
 Each run is bounded by its configured count from 3 through 500. With the
@@ -114,3 +102,13 @@ The web submits `reviewed-auto-unfollow` when it starts this journey. The agent
 normalizes that request to the persisted `auto-unfollow` product mode while
 keeping the initial delivery review-only; only the later exact-set confirmation
 creates an action delivery.
+
+## Chrome-free staging release
+
+The deployable release no longer builds, pushes, maps, or renders the
+`chrome-vnc` image/chart. Because Cloud Deploy applies manifests without
+pruning objects removed from later releases, the staging sweeper-agent chart
+enables one bounded cleanup Job. It deletes the old Chrome Deployment,
+StatefulSet, services, pods, and service account, then waits for their absence.
+It never deletes or mounts `chrome-vnc-pvc`; destructive profile retirement is
+kept for SWP-39.

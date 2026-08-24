@@ -1,0 +1,28 @@
+{{- if .Values.runtimeCleanup.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "sweeper-agent.runtimeCleanupName" . }}
+  labels:
+    {{- include "sweeper-agent.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: {{ add .Values.runtimeCleanup.timeoutSeconds 30 }}
+  ttlSecondsAfterFinished: 60
+  template:
+    metadata:
+      labels:
+        {{- include "sweeper-agent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: runtime-cleanup
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "sweeper-agent.fullname" . }}-runtime-cleanup
+      containers:
+        - name: runtime-cleanup
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python3", "/app/cleanup_chrome_runtime.py"]
+          env:
+            - name: RUNTIME_CLEANUP_TIMEOUT_SECONDS
+              value: {{ .Values.runtimeCleanup.timeoutSeconds | quote }}
+{{- end }}

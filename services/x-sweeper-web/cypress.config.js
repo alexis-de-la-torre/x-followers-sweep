@@ -1,4 +1,9 @@
 import { defineConfig } from "cypress";
+import { execFileSync } from "node:child_process";
+
+function kubectlJson(args) {
+  return JSON.parse(execFileSync("kubectl", args, { encoding: "utf8" }));
+}
 
 export default defineConfig({
   e2e: {
@@ -20,6 +25,33 @@ export default defineConfig({
         log(message) {
           console.log(message);
           return null;
+        },
+        stagingChromeFreeSnapshot() {
+          const namespace = "adlt-staging";
+          const runtime = kubectlJson([
+            "-n", namespace,
+            "get", "deployment,statefulset,pod,service",
+            "-l", "app.kubernetes.io/name=chrome-vnc",
+            "-o", "json",
+          ]);
+          const profile = kubectlJson([
+            "-n", namespace, "get", "persistentvolumeclaim", "chrome-vnc-pvc", "-o", "json",
+          ]);
+          const agentConfig = kubectlJson([
+            "-n", namespace, "get", "configmap", "sweeper-agent-config", "-o", "json",
+          ]);
+          return {
+            runtime: (runtime.items || []).map((item) => ({
+              kind: item.kind,
+              name: item.metadata?.name,
+            })),
+            profile: {
+              name: profile.metadata?.name,
+              phase: profile.status?.phase,
+              capacity: profile.status?.capacity?.storage,
+            },
+            agentConfig: agentConfig.data || {},
+          };
         },
       });
     },

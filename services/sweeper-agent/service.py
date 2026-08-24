@@ -356,14 +356,12 @@ async def lifespan(app: FastAPI):
             settings = PubSubSettings.from_env()
             publisher = GooglePubSubPublisher(settings.project_id, settings.topic_prefix)
             adapter_url = os.environ.get("X_API_ADAPTER_URL", "").strip()
-            if adapter_url:
-                adapter = XApiAdapterClient(adapter_url)
-                executor = ApiSweepExecutor(adapter, BrowserSweepExecutor())
-                app.state.x_api_adapter = adapter
-                app.state.sweep_executor = executor
-            else:
-                executor = BrowserSweepExecutor()
-                app.state.sweep_executor = executor
+            if not adapter_url:
+                raise RuntimeError("X_API_ADAPTER_URL is required when the sweeper platform is enabled")
+            adapter = XApiAdapterClient(adapter_url)
+            executor = ApiSweepExecutor(adapter)
+            app.state.x_api_adapter = adapter
+            app.state.sweep_executor = executor
             handler = SweepTaskHandler(publisher, executor, OutcomeEngineContextLoader(settings.outcome_engine_url))
             platform_runtime = PubSubRuntime(settings, handler, publisher)
             platform_runtime.start(asyncio.get_running_loop())
@@ -388,13 +386,6 @@ async def lifespan(app: FastAPI):
     adapter = getattr(app.state, "x_api_adapter", None)
     if adapter is not None:
         await _load_x_account(app, adapter)
-    else:
-        try:
-            ws, psid = await _connect_chrome()
-            await ws.close()
-            print("Chrome CDP: OK", flush=True)
-        except Exception as e:
-            print(f"Chrome CDP: {e}", flush=True)
     print(f"Model: {JUDGE_MODEL}", flush=True)
     yield
     if platform_runtime is not None:
@@ -780,9 +771,8 @@ class BrowserSweepExecutor:
 class ApiSweepExecutor:
     """Official X API reads and stable-ID relationship writes."""
 
-    def __init__(self, adapter: XApiAdapterClient, write_executor: BrowserSweepExecutor) -> None:
+    def __init__(self, adapter: XApiAdapterClient) -> None:
         self.adapter = adapter
-        self.write_executor = write_executor
 
     async def generate_candidates(self, count: int) -> dict:
         return await self.adapter.following(count)
@@ -947,13 +937,13 @@ async def health():
             "error": getattr(app.state, "x_api_error", None),
         }
     else:
-        try:
-            # Probes run frequently and have a short timeout. Checking Chrome's CDP
-            # discovery document proves it is reachable without opening a WebSocket.
-            await _get_cdp_url()
-            status["chrome"] = "ok"
-        except Exception as e:
-            status["chrome"] = f"error: {e}"
+        status["xApi"] = {
+            "configured": False,
+            "writeConfigured": False,
+            "account": None,
+            "error": getattr(app.state, "platform_error", None)
+            or "X_API_ADAPTER_URL is not configured",
+        }
     status["openrouter"] = "configured"
     runtime = getattr(app.state, "platform_runtime", None)
     if runtime is not None:

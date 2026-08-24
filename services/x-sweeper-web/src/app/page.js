@@ -597,9 +597,12 @@ function AgentInfoButton() {
             value={status?.service === "ok" ? "Online" : status ? "Unreachable" : "Checking…"}
           />
           <AgentInfoRow
-            label="Chrome"
-            value={status?.chrome === "ok" ? "OK" : status?.chrome ? "Unavailable" : "Checking…"}
+            label="X API"
+            value={status?.xApi?.configured && !status?.xApi?.error
+              ? "Connected"
+              : status ? "Unavailable" : "Checking…"}
           />
+          <AgentInfoRow label="X account" value={status?.xApi?.account || "—"} />
           <AgentInfoRow label="Model" value={status?.model || "—"} />
           <AgentInfoRow
             label="OpenRouter"

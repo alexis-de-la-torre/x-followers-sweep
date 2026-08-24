@@ -1,0 +1,24 @@
+{{- if .Values.runtimeCleanup.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "sweeper-agent.fullname" . }}-runtime-cleanup
+  labels:
+    {{- include "sweeper-agent.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    resourceNames: ["chrome-vnc"]
+    verbs: ["get", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["chrome-vnc", "chrome-vnc-headless"]
+    verbs: ["get", "delete"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    resourceNames: ["chrome-vnc"]
+    verbs: ["delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+{{- end }}

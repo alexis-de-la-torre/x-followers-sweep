@@ -403,7 +403,7 @@ export async function fetchAgentStatus() {
     if (!r.ok) return { service: "unreachable" };
     const text = await r.text();
     // Try to parse as JSON, fall back to plain text
-    try { return JSON.parse(text); } catch { return { service: text, chrome: "ok" }; }
+    try { return JSON.parse(text); } catch { return { service: text }; }
   } catch {
     return { service: "unreachable" };
   }

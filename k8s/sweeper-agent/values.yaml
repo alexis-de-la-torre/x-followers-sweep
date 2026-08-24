@@ -14,7 +14,6 @@ service:
   type: ClusterIP
   port: 8080
 
-# Chrome is heavy — needs at least 1GB RAM for headless rendering + VNC
 resources:
   limits:
     memory: 512Mi
@@ -22,8 +21,6 @@ resources:
   requests:
     memory: 256Mi
     cpu: "0.1"
-
-# No Chrome profile needed — connects to chrome-vnc service
 
 livenessProbe:
   httpGet:
@@ -40,5 +37,12 @@ readinessProbe:
   periodSeconds: 15
 
 # Env vars injected via ConfigMap (set per-environment in skaffold profiles)
-env:
-  BROWSER_WS: "http://chrome-vnc:9222/json/version"
+env: {}
+
+# Cloud Deploy applies rendered manifests without pruning objects omitted by a
+# later release. Staging enables this bounded cleanup job for the one-time
+# browser-runtime removal. It deletes only the old workloads, services, and
+# service account; chrome-vnc-pvc is deliberately preserved and unmounted.
+runtimeCleanup:
+  enabled: false
+  timeoutSeconds: 120

@@ -6,6 +6,15 @@ Expand the name of the chart.
 {{- end }}
 
 {{/*
+Give each rendered cleanup Job an immutable identity. Cloud Deploy stores the
+rendered manifest and later applies that exact name; a random render suffix
+avoids trying to patch an earlier Job if its TTL has not removed it yet.
+*/}}
+{{- define "sweeper-agent.runtimeCleanupName" -}}
+{{- printf "%s-runtime-cleanup-%s" (include "sweeper-agent.fullname" .) (randAlphaNum 8 | lower) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
 Create a default fully qualified app name.
 */}}
 {{- define "sweeper-agent.fullname" -}}
