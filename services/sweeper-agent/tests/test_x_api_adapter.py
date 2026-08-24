@@ -135,7 +135,7 @@ def test_api_executor_applies_one_stable_id_with_fresh_before_and_after_reads() 
     adapter = RelationshipAdapter()
     executor = service.ApiSweepExecutor(adapter=adapter, write_executor=BrowserMustNotRun())
 
-    result = run(executor.apply_unfollow("@reviewed", "42"))
+    result = run(executor.apply_unfollow("@reviewed", "42", "1478416609"))
 
     assert adapter.unfollowed == ["42"]
     assert result["handle"] == "@reviewed"
@@ -145,6 +145,171 @@ def test_api_executor_applies_one_stable_id_with_fresh_before_and_after_reads() 
     assert result["before"]["following"] is True
     assert result["after"]["following"] is False
     assert result["mutation"]["targetId"] == "42"
+
+
+def test_api_executor_applies_an_approved_set_sequentially_without_browser_fallback() -> None:
+    class OrderedRelationshipAdapter:
+        def __init__(self) -> None:
+            self.events: list[str] = []
+            self.relationship_reads: dict[str, int] = {}
+
+        async def relationship(self, x_user_id: str) -> dict:
+            self.events.append(f"relationship:{x_user_id}")
+            read = self.relationship_reads.get(x_user_id, 0)
+            self.relationship_reads[x_user_id] = read + 1
+            return {
+                "source": {"id": "1478416609", "username": "dlt_alx"},
+                "target": {"id": x_user_id, "username": f"target-{x_user_id}"},
+                "following": read == 0,
+                "connectionStatus": ["following"] if read == 0 else [],
+            }
+
+        async def unfollow(self, x_user_id: str) -> dict:
+            self.events.append(f"unfollow:{x_user_id}")
+            if x_user_id == "43":
+                raise RuntimeError("X write failed")
+            return {
+                "source": {"id": "1478416609", "username": "dlt_alx"},
+                "targetId": x_user_id,
+                "following": False,
+            }
+
+    class BrowserMustNotRun:
+        async def apply_unfollow(self, _handle: str, _x_user_id: str) -> dict:
+            raise AssertionError("Chrome write path must not run")
+
+        async def apply_unfollows(self, _targets: list[dict]) -> list[dict]:
+            raise AssertionError("Chrome batch write path must not run")
+
+    adapter = OrderedRelationshipAdapter()
+    executor = service.ApiSweepExecutor(adapter=adapter, write_executor=BrowserMustNotRun())
+    targets = [
+        {"handle": "@first", "xUserId": "42"},
+        {"handle": "@broken", "xUserId": "43"},
+        {"handle": "@last", "xUserId": "44"},
+    ]
+
+    results = run(executor.apply_unfollows(targets, "1478416609"))
+
+    assert adapter.events == [
+        "relationship:42", "unfollow:42", "relationship:42",
+        "relationship:43", "unfollow:43",
+        "relationship:44", "unfollow:44", "relationship:44",
+    ]
+    assert [(result["handle"], result["xUserId"], result["status"]) for result in results] == [
+        ("@target-42", "42", "APPLIED"),
+        ("@target-43", "43", "FAILED"),
+        ("@target-44", "44", "APPLIED"),
+    ]
+    assert [result["reviewedHandle"] for result in results] == [
+        "@first", "@broken", "@last",
+    ]
+    assert [result["sequence"] for result in results] == [1, 2, 3]
+    assert all(result["completedAt"].endswith("+00:00") for result in results)
+    assert results[0]["transport"] == results[2]["transport"] == "X_API"
+    assert results[1]["detail"] == "X write failed"
+
+
+def test_api_executor_persists_an_already_unfollowed_target_as_a_terminal_noop() -> None:
+    class AlreadyGoneAdapter:
+        async def relationship(self, x_user_id: str) -> dict:
+            return {
+                "source": {"id": "1478416609", "username": "dlt_alx"},
+                "target": {"id": x_user_id, "username": "gone"},
+                "following": False,
+                "connectionStatus": [],
+            }
+
+        async def unfollow(self, _x_user_id: str) -> dict:
+            raise AssertionError("an already-unfollowed target must not be mutated")
+
+    executor = service.ApiSweepExecutor(adapter=AlreadyGoneAdapter(), write_executor=object())
+
+    result = run(executor.apply_unfollow("@gone", "42", "1478416609"))
+
+    assert result["status"] == "ALREADY_UNFOLLOWED"
+    assert result["transport"] == "X_API"
+    assert result["before"]["following"] is False
+
+
+def test_api_executor_refuses_to_write_from_a_different_authenticated_source() -> None:
+    class DifferentSourceAdapter:
+        def __init__(self) -> None:
+            self.mutations: list[str] = []
+
+        async def relationship(self, x_user_id: str) -> dict:
+            return {
+                "source": {"id": "999", "username": "someone_else"},
+                "target": {"id": x_user_id, "username": "reviewed"},
+                "following": True,
+                "connectionStatus": ["following"],
+            }
+
+        async def unfollow(self, x_user_id: str) -> dict:
+            self.mutations.append(x_user_id)
+            return {"source": {"id": "999"}, "targetId": x_user_id, "following": False}
+
+    adapter = DifferentSourceAdapter()
+    executor = service.ApiSweepExecutor(adapter=adapter, write_executor=object())
+
+    results = run(executor.apply_unfollows(
+        [{"handle": "@reviewed", "xUserId": "42"}],
+        "1478416609",
+    ))
+
+    assert adapter.mutations == []
+    assert len(results) == 1
+    assert results[0]["handle"] == "@reviewed"
+    assert results[0]["xUserId"] == "42"
+    assert results[0]["sequence"] == 1
+    assert results[0]["status"] == "FAILED"
+    assert results[0]["transport"] == "X_API"
+    assert results[0]["detail"] == "X_SOURCE_ACCOUNT_MISMATCH"
+    assert results[0]["before"]["source"]["id"] == "999"
+    assert results[0]["startedAt"].endswith("+00:00")
+    assert results[0]["completedAt"].endswith("+00:00")
+
+
+def test_api_executor_retains_current_handle_and_available_evidence_when_after_read_fails() -> None:
+    class FailingAfterReadAdapter:
+        def __init__(self) -> None:
+            self.relationship_reads = 0
+
+        async def relationship(self, x_user_id: str) -> dict:
+            self.relationship_reads += 1
+            if self.relationship_reads == 2:
+                raise RuntimeError("after relationship read failed")
+            return {
+                "source": {"id": "1478416609", "username": "dlt_alx"},
+                "target": {"id": x_user_id, "username": "current_name"},
+                "following": True,
+                "connectionStatus": ["following"],
+            }
+
+        async def unfollow(self, x_user_id: str) -> dict:
+            return {
+                "source": {"id": "1478416609", "username": "dlt_alx"},
+                "targetId": x_user_id,
+                "following": False,
+            }
+
+    executor = service.ApiSweepExecutor(adapter=FailingAfterReadAdapter(), write_executor=object())
+
+    results = run(executor.apply_unfollows(
+        [{"handle": "@review_handle", "xUserId": "42"}],
+        "1478416609",
+    ))
+
+    assert len(results) == 1
+    result = results[0]
+    assert result["status"] == "FAILED"
+    assert result["handle"] == "@current_name"
+    assert result["reviewedHandle"] == "@review_handle"
+    assert result["before"]["following"] is True
+    assert result["mutation"]["following"] is False
+    assert result["detail"] == "after relationship read failed"
+    assert result["sequence"] == 1
+    assert result["completedAt"].endswith("+00:00")
 
 
 def test_adapter_client_uses_stable_id_for_relationship_lookup_and_delete() -> None:

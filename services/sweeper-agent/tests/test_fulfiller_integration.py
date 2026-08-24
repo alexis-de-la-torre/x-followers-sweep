@@ -83,7 +83,7 @@ class RecordingExecutor:
         self.generate_calls: list[int] = []
         self.review_calls: list[tuple[list[str], str]] = []
         self.unfollow_calls: list[tuple[str, str]] = []
-        self.unfollows_calls: list[list[dict]] = []
+        self.unfollows_calls: list[tuple[list[dict], str]] = []
 
     async def generate_candidates(self, count: int) -> list[str]:
         self.events.append("execute:generate")
@@ -113,13 +113,18 @@ class RecordingExecutor:
             "appliedAt": "2026-08-23T12:00:00+00:00",
         }
 
-    async def apply_unfollows(self, reviews: list[dict]) -> list[dict]:
+    async def apply_unfollows(self, targets: list[dict], source_x_user_id: str) -> list[dict]:
         self.events.append("execute:auto-unfollow")
-        self.unfollows_calls.append(reviews)
+        self.unfollows_calls.append((targets, source_x_user_id))
         return [
-            {"handle": review["handle"], "status": "APPLIED", "appliedAt": "2026-08-23T12:00:00+00:00"}
-            for review in reviews
-            if review.get("decision") == "UNFOLLOW"
+            {
+                "handle": target["handle"],
+                "xUserId": target["xUserId"],
+                "status": "APPLIED",
+                "transport": "X_API",
+                "appliedAt": "2026-08-23T12:00:00+00:00",
+            }
+            for target in targets
         ]
 
 
@@ -261,33 +266,128 @@ def test_apply_unfollow_task_uses_the_authorized_handle_and_persists_its_result(
     assert broker_ack.acked == 1
 
 
-def test_auto_unfollow_task_applies_only_persisted_unfollow_reviews() -> None:
+def test_save_selection_task_persists_the_exact_order_without_executing() -> None:
     events: list[str] = []
     publisher = RecordingPublisher(events)
     executor = RecordingExecutor(events)
     broker_ack = RecordingBrokerAck(events)
-    reviews = [
-        {"handle": "@keep", "decision": "KEEP", "reason": "Relevant"},
-        {"handle": "@remove", "decision": "UNFOLLOW", "reason": "Inactive"},
+    targets = [
+        {"handle": "@second", "xUserId": "43"},
+        {"handle": "@remove", "xUserId": "42"},
     ]
     handler = SweepTaskHandler(
         publisher,
         executor,
-        lambda _: {"params": {"mode": "auto-unfollow"}, "reviews": reviews},
+        lambda _: {"params": {"targets": targets, "sourceXUserId": "1478416609"}},
     )
 
-    run(handler.handle(new_task("apply-unfollows", "task-auto"), {}, broker_ack))
+    run(handler.handle(new_task("save-selection", "task-selection"), {}, broker_ack))
 
-    assert executor.unfollows_calls == [reviews]
-    assert publisher.messages[-1][1]["contextPatch"] == {
-        "unfollows": [
-            {
-                "handle": "@remove",
-                "status": "APPLIED",
-                "appliedAt": "2026-08-23T12:00:00+00:00",
-            }
-        ]
+    assert executor.unfollows_calls == []
+    assert executor.unfollow_calls == []
+    assert publisher.messages[-1][1]["contextPatch"]["selection"] == {
+        "targets": targets,
+        "sourceXUserId": "1478416609",
+        "status": "SAVED",
     }
+    assert broker_ack.acked == 1
+
+
+def test_each_approved_unfollow_step_persists_visible_progress_before_the_next_target() -> None:
+    events: list[str] = []
+    publisher = RecordingPublisher(events)
+    executor = RecordingExecutor(events)
+    broker_ack = RecordingBrokerAck(events)
+    targets = [
+        {"handle": "@second", "xUserId": "43"},
+        {"handle": "@remove", "xUserId": "42"},
+    ]
+    handler = SweepTaskHandler(
+        publisher,
+        executor,
+        lambda _: {"params": {"targets": targets, "sourceXUserId": "1478416609"}},
+    )
+
+    run(handler.handle(new_task("apply-unfollow-0001", "task-auto-1"), {}, broker_ack))
+
+    assert executor.unfollows_calls == [([targets[0]], "1478416609")]
+    first_result = publisher.messages[-1][1]["contextPatch"]["unfollowResults"]["43"]
+    assert first_result == {
+        "handle": "@second",
+        "xUserId": "43",
+        "status": "APPLIED",
+        "transport": "X_API",
+        "appliedAt": "2026-08-23T12:00:00+00:00",
+        "sequence": 1,
+        "completedAt": first_result["completedAt"],
+    }
+    assert first_result["completedAt"].endswith("+00:00")
+
+    run(handler.handle(new_task("apply-unfollow-0002", "task-auto-2"), {}, broker_ack))
+
+    assert executor.unfollows_calls == [
+        ([targets[0]], "1478416609"),
+        ([targets[1]], "1478416609"),
+    ]
+    second_result = publisher.messages[-1][1]["contextPatch"]["unfollowResults"]["42"]
+    assert second_result["handle"] == "@remove"
+    assert second_result["sequence"] == 2
+    assert second_result["completedAt"].endswith("+00:00")
+
+
+def test_a_persisted_target_failure_completes_its_step_so_the_next_target_can_run() -> None:
+    class FailedTargetExecutor(RecordingExecutor):
+        async def apply_unfollows(
+            self,
+            targets: list[dict],
+            source_x_user_id: str,
+        ) -> list[dict]:
+            self.unfollows_calls.append((targets, source_x_user_id))
+            target = targets[0]
+            return [{
+                "handle": target["handle"],
+                "xUserId": target["xUserId"],
+                "status": "FAILED" if target["xUserId"] == "43" else "APPLIED",
+                "transport": "X_API",
+                **({"detail": "X write failed"} if target["xUserId"] == "43" else {}),
+            }]
+
+    events: list[str] = []
+    publisher = RecordingPublisher(events)
+    executor = FailedTargetExecutor(events)
+    broker_ack = RecordingBrokerAck(events)
+    targets = [
+        {"handle": "@broken", "xUserId": "43"},
+        {"handle": "@next", "xUserId": "44"},
+    ]
+    handler = SweepTaskHandler(
+        publisher,
+        executor,
+        lambda _: {"params": {"targets": targets, "sourceXUserId": "1478416609"}},
+    )
+
+    run(handler.handle(new_task("apply-unfollow-0001", "task-failed-target"), {}, broker_ack))
+
+    done = publisher.messages[-1][1]
+    assert done["resultCode"] == "SUCCESS"
+    assert done["completionDetail"] is None
+    result = done["contextPatch"]["unfollowResults"]["43"]
+    assert result["status"] == "FAILED"
+    assert result["detail"] == "X write failed"
+    assert result["sequence"] == 1
+
+    run(handler.handle(new_task("apply-unfollow-0002", "task-next-target"), {}, broker_ack))
+
+    next_done = publisher.messages[-1][1]
+    assert next_done["resultCode"] == "SUCCESS"
+    next_result = next_done["contextPatch"]["unfollowResults"]["44"]
+    assert next_result["status"] == "APPLIED"
+    assert next_result["sequence"] == 2
+    assert executor.unfollows_calls == [
+        ([targets[0]], "1478416609"),
+        ([targets[1]], "1478416609"),
+    ]
+    assert broker_ack.acked == 2
 
 
 def test_failed_work_reports_terminal_failure_before_broker_ack() -> None:

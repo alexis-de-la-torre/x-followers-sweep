@@ -11,7 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from openai import AsyncOpenAI
 
 from tools import BrowserTools
@@ -20,12 +20,16 @@ from platform_adapter import (
     DELIVER_TOPIC,
     GooglePubSubPublisher,
     OutcomeEngineContextLoader,
+    OutcomeEngineLatestSelectionLoader,
+    OutcomeEngineSourceLoader,
     OutcomeEngineSweepLoader,
     PubSubRuntime,
     PubSubSettings,
     SweepTaskHandler,
+    selection_delivery_command,
     sweep_delivery_command,
     unfollow_delivery_command,
+    unfollow_set_delivery_command,
 )
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -169,18 +173,65 @@ class CandidateResponse(BaseModel):
 
 class SweepRequest(BaseModel):
     id: uuid.UUID
-    mode: str = Field(default="dry-run", pattern="^(dry-run|auto-unfollow)$")
+    mode: str = Field(
+        default="dry-run",
+        pattern="^(dry-run|auto-unfollow|reviewed-auto-unfollow)$",
+    )
     count: int = Field(default=3, ge=1, le=500)
+
+    @property
+    def product_mode(self) -> str:
+        if self.mode == "reviewed-auto-unfollow":
+            return "auto-unfollow"
+        return self.mode
 
 class SweepAccepted(BaseModel):
     id: uuid.UUID
     status: str = "accepted"
 
 
-class UnfollowRequest(BaseModel):
-    id: uuid.UUID
+class UnfollowTarget(BaseModel):
     handle: str = Field(pattern=r"^@[A-Za-z0-9_]{1,15}$")
     x_user_id: str = Field(alias="xUserId", pattern=r"^[0-9]{1,19}$")
+
+
+class SelectionRequest(BaseModel):
+    id: uuid.UUID
+    targets: list[UnfollowTarget]
+
+    @model_validator(mode="after")
+    def validate_selection(self):
+        if not self.targets:
+            raise ValueError("reviewed selection cannot be empty")
+        handles = [target.handle.casefold() for target in self.targets]
+        ids = [target.x_user_id for target in self.targets]
+        if len(handles) != len(set(handles)) or len(ids) != len(set(ids)):
+            raise ValueError("reviewed selection must contain unique accounts")
+        return self
+
+
+class UnfollowRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    id: Optional[uuid.UUID] = None
+    handle: Optional[str] = Field(default=None, pattern=r"^@[A-Za-z0-9_]{1,15}$")
+    x_user_id: Optional[str] = Field(default=None, alias="xUserId", pattern=r"^[0-9]{1,19}$")
+    selection_id: Optional[uuid.UUID] = Field(default=None, alias="selectionId")
+
+    @model_validator(mode="after")
+    def validate_action_shape(self):
+        has_single = any(value is not None for value in (self.id, self.handle, self.x_user_id))
+        has_selection = self.selection_id is not None
+        if has_single == has_selection:
+            raise ValueError("provide either one target or one durable selection")
+        if has_single and (self.id is None or self.handle is None or self.x_user_id is None):
+            raise ValueError("single target requires id, handle, and xUserId")
+        return self
+
+
+def reviewed_action_id(sweep_delivery_id: str) -> str:
+    """Return the one stable reviewed-action identity owned by a sweep delivery."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"x-sweeper:reviewed-unfollow:{sweep_delivery_id}"))
 
 
 def _parse_json_array(text: str) -> list:
@@ -318,6 +369,17 @@ async def lifespan(app: FastAPI):
             platform_runtime.start(asyncio.get_running_loop())
             app.state.sweep_publisher = publisher
             app.state.sweep_loader = OutcomeEngineSweepLoader(settings.outcome_engine_url)
+            app.state.selection_loader = OutcomeEngineSourceLoader(
+                settings.outcome_engine_url,
+                "x-sweep-selection",
+            )
+            app.state.latest_selection_loader = OutcomeEngineLatestSelectionLoader(
+                settings.outcome_engine_url,
+            )
+            app.state.action_loader = OutcomeEngineSourceLoader(
+                settings.outcome_engine_url,
+                "x-sweep-unfollow",
+            )
             app.state.platform_runtime = platform_runtime
             print(f"Outcome Engine fulfiller: listening on {settings.subscription_id}", flush=True)
         except Exception as e:
@@ -367,7 +429,7 @@ async def accept_sweep(req: SweepRequest):
     try:
         await publisher.publish(
             DELIVER_TOPIC,
-            sweep_delivery_command(sweep_id, req.mode, req.count),
+            sweep_delivery_command(sweep_id, req.product_mode, req.count),
         )
     except Exception as exc:
         raise HTTPException(503, "could not accept sweep") from exc
@@ -379,12 +441,12 @@ async def accept_sweep(req: SweepRequest):
 
 
 @app.post(
-    "/api/v1/sweeps/{sweep_id}/unfollows",
+    "/api/v1/sweeps/{sweep_id}/selections",
     response_model=SweepAccepted,
     status_code=202,
 )
-async def accept_unfollow(sweep_id: uuid.UUID, req: UnfollowRequest):
-    """Accept one explicit action only when the persisted review selected it."""
+async def save_reviewed_selection(sweep_id: uuid.UUID, req: SelectionRequest):
+    """Persist an exact reviewed subset without authorizing an X relationship write."""
     publisher = getattr(app.state, "sweep_publisher", None)
     loader = getattr(app.state, "sweep_loader", None)
     if publisher is None or loader is None:
@@ -397,41 +459,220 @@ async def accept_unfollow(sweep_id: uuid.UUID, req: UnfollowRequest):
         raise HTTPException(503, "could not load reviewed sweep") from exc
 
     context = sweep.get("context", {}) if isinstance(sweep, dict) else {}
-    reviews = context.get("reviews", []) if isinstance(context, dict) else []
-    selected = next(
-        (
-            review
-            for review in reviews
-            if isinstance(review, dict)
-            and str(review.get("handle", "")).casefold() == req.handle.casefold()
-            and review.get("decision") == "UNFOLLOW"
-        ),
-        None,
-    )
-    if selected is None:
-        raise HTTPException(409, "handle is not a reviewed UNFOLLOW decision")
-    if str(selected.get("xUserId", "")) != req.x_user_id:
-        raise HTTPException(409, "target is not the reviewed UNFOLLOW decision")
-
-    unfollow_id = str(req.id)
+    source_x_user_id = _reviewed_source_x_user_id(context)
+    selected_targets = _canonical_reviewed_targets(context, req.targets)
+    selection_id = str(req.id)
     try:
         await publisher.publish(
             DELIVER_TOPIC,
-            unfollow_delivery_command(
-                unfollow_id,
+            selection_delivery_command(
+                selection_id,
                 str(sweep_id),
                 str(sweep["deliveryId"]),
-                str(selected["handle"]),
-                req.x_user_id,
+                source_x_user_id,
+                selected_targets,
             ),
         )
     except Exception as exc:
-        raise HTTPException(503, "could not accept unfollow") from exc
+        raise HTTPException(503, "could not save reviewed selection") from exc
+    return JSONResponse(
+        status_code=202,
+        headers={"Location": f"/api/v1/selections/{selection_id}"},
+        content={"id": selection_id, "status": "accepted"},
+    )
+
+
+def _reviewed_source_x_user_id(context: dict) -> str:
+    x_api = context.get("xApi") if isinstance(context, dict) else None
+    source = x_api.get("source") if isinstance(x_api, dict) else None
+    source_x_user_id = str(source.get("id") or "") if isinstance(source, dict) else ""
+    if not re.fullmatch(r"[0-9]{1,19}", source_x_user_id):
+        raise HTTPException(409, "reviewed sweep has no X source identity")
+    return source_x_user_id
+
+
+def _canonical_reviewed_targets(
+    context: dict,
+    requested: list[UnfollowTarget],
+) -> list[dict[str, str]]:
+    reviews = context.get("reviews", []) if isinstance(context, dict) else []
+    selected_targets: list[dict[str, str]] = []
+    for target in requested:
+        selected = next(
+            (
+                review
+                for review in reviews
+                if isinstance(review, dict)
+                and str(review.get("handle", "")).casefold() == target.handle.casefold()
+                and review.get("decision") == "UNFOLLOW"
+            ),
+            None,
+        )
+        if selected is None:
+            raise HTTPException(409, "handle is not a reviewed UNFOLLOW decision")
+        if str(selected.get("xUserId", "")) != target.x_user_id:
+            raise HTTPException(409, "target is not the reviewed UNFOLLOW decision")
+        selected_targets.append({
+            "handle": str(selected["handle"]),
+            "xUserId": target.x_user_id,
+        })
+    return selected_targets
+
+
+async def _load_completed_selection(loader, selection_id: str) -> dict:
+    """Bridge the short Pub/Sub materialization window before confirmation."""
+    last_error: Exception | None = None
+    for attempt in range(20):
+        try:
+            selection = loader(selection_id)
+            if inspect.isawaitable(selection):
+                selection = await selection
+            if isinstance(selection, dict) and selection.get("status") == "ALL_TASKS_COMPLETED":
+                return selection
+            last_error = RuntimeError("reviewed selection is not complete")
+        except Exception as exc:
+            last_error = exc
+        if attempt < 19:
+            await asyncio.sleep(0.1)
+    raise last_error or RuntimeError("reviewed selection is unavailable")
+
+
+async def _load_latest_selection(loader, sweep_id: str, sweep_delivery_id: str) -> dict:
+    last_error: Exception | None = None
+    for attempt in range(20):
+        try:
+            selection = loader(sweep_id, sweep_delivery_id)
+            if inspect.isawaitable(selection):
+                selection = await selection
+            if isinstance(selection, dict):
+                return selection
+            last_error = RuntimeError("reviewed selection history is not materialized")
+        except Exception as exc:
+            last_error = exc
+        if attempt < 19:
+            await asyncio.sleep(0.1)
+    raise last_error or RuntimeError("reviewed selection history is unavailable")
+
+
+async def _find_source_delivery(loader, source_id: str) -> dict | None:
+    find = getattr(loader, "find", None)
+    result = find(source_id) if callable(find) else loader(source_id)
+    if inspect.isawaitable(result):
+        result = await result
+    return result if isinstance(result, dict) else None
+
+
+def _accepted_unfollow(unfollow_id: str) -> JSONResponse:
     return JSONResponse(
         status_code=202,
         headers={"Location": f"/api/v1/unfollows/{unfollow_id}"},
         content={"id": unfollow_id, "status": "accepted"},
     )
+
+
+@app.post(
+    "/api/v1/sweeps/{sweep_id}/unfollows",
+    response_model=SweepAccepted,
+    status_code=202,
+)
+async def accept_unfollow(sweep_id: uuid.UUID, req: UnfollowRequest):
+    """Accept one legacy target or the exact durable selection the user confirmed."""
+    publisher = getattr(app.state, "sweep_publisher", None)
+    loader = getattr(app.state, "sweep_loader", None)
+    if publisher is None or loader is None:
+        raise HTTPException(503, "sweep platform is not configured")
+    try:
+        sweep = loader(str(sweep_id))
+        if inspect.isawaitable(sweep):
+            sweep = await sweep
+    except Exception as exc:
+        raise HTTPException(503, "could not load reviewed sweep") from exc
+
+    context = sweep.get("context", {}) if isinstance(sweep, dict) else {}
+    sweep_delivery_id = str(sweep.get("deliveryId") or "")
+    try:
+        if req.selection_id is not None:
+            selection_loader = getattr(app.state, "selection_loader", None)
+            latest_selection_loader = getattr(app.state, "latest_selection_loader", None)
+            action_loader = getattr(app.state, "action_loader", None)
+            if (
+                selection_loader is None
+                or latest_selection_loader is None
+                or action_loader is None
+            ):
+                raise HTTPException(503, "selection platform is not configured")
+            unfollow_id = reviewed_action_id(sweep_delivery_id)
+            existing_action = await _find_source_delivery(action_loader, unfollow_id)
+            if existing_action is not None:
+                existing_context = existing_action.get("context", {})
+                existing_params = (
+                    existing_context.get("params", {})
+                    if isinstance(existing_context, dict)
+                    else {}
+                )
+                if (
+                    str(existing_params.get("sweepId") or "") == str(sweep_id)
+                    and str(existing_params.get("sweepDeliveryId") or "") == sweep_delivery_id
+                    and str(existing_params.get("selectionId") or "") == str(req.selection_id)
+                ):
+                    return _accepted_unfollow(unfollow_id)
+                raise HTTPException(409, "this sweep already has a confirmed selection")
+            selection = await _load_completed_selection(selection_loader, str(req.selection_id))
+            latest_selection = await _load_latest_selection(
+                latest_selection_loader,
+                str(sweep_id),
+                sweep_delivery_id,
+            )
+            if str(latest_selection.get("sourceId") or "") != str(req.selection_id):
+                raise HTTPException(
+                    409,
+                    "selection has been replaced; review the visible set again",
+                )
+            selection_context = selection.get("context", {})
+            params = selection_context.get("params", {}) if isinstance(selection_context, dict) else {}
+            source_x_user_id = _reviewed_source_x_user_id(context)
+            if str(params.get("sweepId") or "") != str(sweep_id):
+                raise HTTPException(409, "selection does not belong to this sweep")
+            if str(params.get("sweepDeliveryId") or "") != sweep_delivery_id:
+                raise HTTPException(409, "selection does not belong to this sweep delivery")
+            if str(params.get("sourceXUserId") or "") != source_x_user_id:
+                raise HTTPException(409, "selection belongs to another X account")
+            raw_targets = params.get("targets")
+            if not isinstance(raw_targets, list) or not raw_targets:
+                raise HTTPException(409, "selection has no reviewed targets")
+            try:
+                requested = [UnfollowTarget.model_validate(target) for target in raw_targets]
+            except ValueError as exc:
+                raise HTTPException(409, "selection has invalid reviewed targets") from exc
+            selected_targets = _canonical_reviewed_targets(context, requested)
+            command = unfollow_set_delivery_command(
+                unfollow_id,
+                str(sweep_id),
+                sweep_delivery_id,
+                str(req.selection_id),
+                str(selection["deliveryId"]),
+                source_x_user_id,
+                selected_targets,
+            )
+        else:
+            selected_targets = _canonical_reviewed_targets(
+                context,
+                [UnfollowTarget(handle=req.handle, xUserId=req.x_user_id)],
+            )
+            unfollow_id = str(req.id)
+            command = unfollow_delivery_command(
+                unfollow_id,
+                str(sweep_id),
+                sweep_delivery_id,
+                selected_targets[0]["handle"],
+                selected_targets[0]["xUserId"],
+            )
+        await publisher.publish(DELIVER_TOPIC, command)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(503, "could not accept unfollow") from exc
+    return _accepted_unfollow(unfollow_id)
 
 
 @app.post("/generate-candidates", response_model=CandidateResponse)
@@ -498,7 +739,12 @@ class BrowserSweepExecutor:
         response = await review_handles(ReviewRequest(handles=handles, mode=mode))
         return [result.model_dump(exclude_none=True) for result in response.results]
 
-    async def apply_unfollow(self, handle: str, x_user_id: str) -> dict:
+    async def apply_unfollow(
+        self,
+        handle: str,
+        x_user_id: str,
+        source_x_user_id: str | None = None,
+    ) -> dict:
         ws, psid = await _connect_chrome()
         try:
             browser = BrowserTools(ws, psid)
@@ -523,27 +769,16 @@ class BrowserSweepExecutor:
         finally:
             await ws.close()
 
-    async def apply_unfollows(self, reviews: list[dict]) -> list[dict]:
-        results = []
-        for review in reviews:
-            if review.get("decision") != "UNFOLLOW":
-                continue
-            handle = str(review["handle"])
-            x_user_id = str(review.get("xUserId") or "")
-            try:
-                results.append(await self.apply_unfollow(handle, x_user_id))
-            except Exception as exc:
-                results.append({
-                    "handle": handle,
-                    "xUserId": x_user_id,
-                    "status": "FAILED",
-                    "detail": str(exc) or exc.__class__.__name__,
-                })
-        return results
+    async def apply_unfollows(
+        self,
+        targets: list[dict],
+        source_x_user_id: str | None = None,
+    ) -> list[dict]:
+        raise RuntimeError("X_API_REQUIRED_FOR_APPROVED_SET")
 
 
 class ApiSweepExecutor:
-    """M1 executor: official X API reads, existing write path until the M2 API delete lands."""
+    """Official X API reads and stable-ID relationship writes."""
 
     def __init__(self, adapter: XApiAdapterClient, write_executor: BrowserSweepExecutor) -> None:
         self.adapter = adapter
@@ -574,39 +809,129 @@ class ApiSweepExecutor:
             decision["xUserId"] = profile["xUserId"]
         return decisions
 
-    async def apply_unfollow(self, handle: str, x_user_id: str) -> dict:
-        before = await self.adapter.relationship(x_user_id)
-        target = before.get("target") if isinstance(before.get("target"), dict) else {}
-        if str(target.get("id") or "") != x_user_id:
-            raise ValueError("X_RELATIONSHIP_TARGET_MISMATCH")
-        if before.get("following") is not True:
-            raise ValueError("X_TARGET_NOT_FOLLOWED")
+    @staticmethod
+    def _require_source(document: dict, source_x_user_id: str | None) -> None:
+        if source_x_user_id is None:
+            return
+        source = document.get("source") if isinstance(document.get("source"), dict) else {}
+        if str(source.get("id") or "") != source_x_user_id:
+            raise ValueError("X_SOURCE_ACCOUNT_MISMATCH")
 
-        mutation = await self.adapter.unfollow(x_user_id)
-        if str(mutation.get("targetId") or "") != x_user_id:
-            raise ValueError("X_UNFOLLOW_TARGET_MISMATCH")
-        if mutation.get("following") is not False:
-            raise ValueError("X_UNFOLLOW_NOT_APPLIED")
+    async def apply_unfollow(
+        self,
+        handle: str,
+        x_user_id: str,
+        source_x_user_id: str | None = None,
+    ) -> dict:
+        started_at = datetime.now(timezone.utc).isoformat()
+        current_handle = handle
+        before = None
+        mutation = None
+        after = None
+        try:
+            before = await self.adapter.relationship(x_user_id)
+            target = before.get("target") if isinstance(before.get("target"), dict) else {}
+            username = str(target.get("username") or "").strip().lstrip("@")
+            if username:
+                current_handle = f"@{username}"
+            self._require_source(before, source_x_user_id)
+            if str(target.get("id") or "") != x_user_id:
+                raise ValueError("X_RELATIONSHIP_TARGET_MISMATCH")
+            if before.get("following") is False:
+                return {
+                    "handle": current_handle,
+                    **({"reviewedHandle": handle} if current_handle.casefold() != handle.casefold() else {}),
+                    "xUserId": x_user_id,
+                    "status": "ALREADY_UNFOLLOWED",
+                    "transport": "X_API",
+                    "detail": "X target is not currently followed",
+                    "startedAt": started_at,
+                    "completedAt": datetime.now(timezone.utc).isoformat(),
+                    "before": before,
+                }
+            if before.get("following") is not True:
+                raise ValueError("X_RELATIONSHIP_STATE_UNKNOWN")
 
-        after = await self.adapter.relationship(x_user_id)
-        if str((after.get("target") or {}).get("id") or "") != x_user_id:
-            raise ValueError("X_RELATIONSHIP_TARGET_MISMATCH")
-        if after.get("following") is not False:
-            raise ValueError("X_UNFOLLOW_NOT_REFLECTED")
+            mutation = await self.adapter.unfollow(x_user_id)
+            self._require_source(mutation, source_x_user_id)
+            if str(mutation.get("targetId") or "") != x_user_id:
+                raise ValueError("X_UNFOLLOW_TARGET_MISMATCH")
+            if mutation.get("following") is not False:
+                raise ValueError("X_UNFOLLOW_NOT_APPLIED")
 
-        return {
-            "handle": handle,
-            "xUserId": x_user_id,
-            "status": "APPLIED",
-            "transport": "X_API",
-            "appliedAt": datetime.now(timezone.utc).isoformat(),
-            "before": before,
-            "mutation": mutation,
-            "after": after,
-        }
+            after = await self.adapter.relationship(x_user_id)
+            self._require_source(after, source_x_user_id)
+            if str((after.get("target") or {}).get("id") or "") != x_user_id:
+                raise ValueError("X_RELATIONSHIP_TARGET_MISMATCH")
+            if after.get("following") is not False:
+                raise ValueError("X_UNFOLLOW_NOT_REFLECTED")
 
-    async def apply_unfollows(self, reviews: list[dict]) -> list[dict]:
-        return await self.write_executor.apply_unfollows(reviews)
+            return {
+                "handle": current_handle,
+                **({"reviewedHandle": handle} if current_handle.casefold() != handle.casefold() else {}),
+                "xUserId": x_user_id,
+                "status": "APPLIED",
+                "transport": "X_API",
+                "startedAt": started_at,
+                "appliedAt": datetime.now(timezone.utc).isoformat(),
+                "completedAt": datetime.now(timezone.utc).isoformat(),
+                "before": before,
+                "mutation": mutation,
+                "after": after,
+            }
+        except Exception as exc:
+            return {
+                "handle": current_handle,
+                **({"reviewedHandle": handle} if current_handle.casefold() != handle.casefold() else {}),
+                "xUserId": x_user_id,
+                "status": "FAILED",
+                "transport": "X_API",
+                "detail": str(exc) or exc.__class__.__name__,
+                "startedAt": started_at,
+                "completedAt": datetime.now(timezone.utc).isoformat(),
+                **({"before": before} if before is not None else {}),
+                **({"mutation": mutation} if mutation is not None else {}),
+                **({"after": after} if after is not None else {}),
+            }
+
+    async def apply_unfollows(
+        self,
+        targets: list[dict],
+        source_x_user_id: str,
+    ) -> list[dict]:
+        if not source_x_user_id:
+            raise ValueError("MISSING_REVIEWED_X_SOURCE_ID")
+        results = []
+        for sequence, target in enumerate(targets, start=1):
+            handle = str(target.get("handle") or "")
+            x_user_id = str(target.get("xUserId") or "")
+            if not handle or not x_user_id:
+                results.append({
+                    "handle": handle,
+                    "xUserId": x_user_id,
+                    "sequence": sequence,
+                    "status": "FAILED",
+                    "transport": "X_API",
+                    "detail": "INVALID_APPROVED_UNFOLLOW_TARGET",
+                    "completedAt": datetime.now(timezone.utc).isoformat(),
+                })
+                continue
+            try:
+                result = await self.apply_unfollow(handle, x_user_id, source_x_user_id)
+            except Exception as exc:
+                result = {
+                    "handle": handle,
+                    "xUserId": x_user_id,
+                    "status": "FAILED",
+                    "transport": "X_API",
+                    "detail": str(exc) or exc.__class__.__name__,
+                }
+            results.append({
+                **result,
+                "sequence": sequence,
+                "completedAt": datetime.now(timezone.utc).isoformat(),
+            })
+        return results
 
 
 @app.get("/health")
